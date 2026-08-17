@@ -31,6 +31,9 @@ struct CollageTask: Identifiable, Codable, Hashable {
   var layoutRowWeights: [Double]?
   var layoutColumnWeights: [[Double]]?
   var layoutFrameOverrides: [NormalizedLayoutFrame]?
+  var customLayoutFrames: [NormalizedLayoutFrame]?
+  var savedCustomLayoutID: UUID?
+  var savedLayoutSnapshot: SavedLayoutSnapshot?
   var backgroundHex: String = "FFFFFF"
   var latestExportFileName: String?
 
@@ -57,6 +60,15 @@ struct CollageTask: Identifiable, Codable, Hashable {
     layoutColumnWeights = nil
     layoutFrameOverrides = nil
     if invalidateExport { latestExportFileName = nil }
+  }
+
+  mutating func clearCustomLayout() {
+    customLayoutFrames = nil
+    savedCustomLayoutID = nil
+  }
+
+  mutating func clearSavedLayoutSnapshot() {
+    savedLayoutSnapshot = nil
   }
 
   mutating func invalidateExport() {
@@ -88,6 +100,8 @@ struct CollageTaskEditorState: Equatable {
   let layoutRowWeights: [Double]?
   let layoutColumnWeights: [[Double]]?
   let layoutFrameOverrides: [NormalizedLayoutFrame]?
+  let customLayoutFrames: [NormalizedLayoutFrame]?
+  let savedCustomLayoutID: UUID?
   let backgroundHex: String
   let latestExportFileName: String?
 }
@@ -132,6 +146,8 @@ extension CollageTask {
       layoutRowWeights: layoutRowWeights,
       layoutColumnWeights: layoutColumnWeights,
       layoutFrameOverrides: layoutFrameOverrides,
+      customLayoutFrames: customLayoutFrames,
+      savedCustomLayoutID: savedCustomLayoutID,
       backgroundHex: backgroundHex.uppercased(),
       latestExportFileName: latestExportFileName
     )
@@ -153,6 +169,38 @@ extension CollageTask {
   }
 }
 
+struct SavedCustomLayout: Identifiable, Codable, Hashable {
+  var id = UUID()
+  var name: String
+  var photoCount: Int
+  var frames: [NormalizedLayoutFrame]
+  var createdAt = Date()
+  var modifiedAt = Date()
+}
+
+struct SavedLayoutSnapshot: Codable, Hashable {
+  var sourceLayoutID: String?
+  var sourceLayoutTitle: String
+  var sourceLayoutFamily: String
+  var photoCount: Int
+  var outputAspectRatio: Double
+  var frames: [SavedLayoutFrame]
+}
+
+struct SavedLayoutFrame: Codable, Hashable {
+  var rect: NormalizedLayoutFrame
+  var clipPolygon: [NormalizedLayoutPoint]?
+  var cornerRadiusFraction: Double
+  var rotationDegrees: Double
+  var zIndex: Int
+  var usesAspectFit: Bool
+}
+
+struct NormalizedLayoutPoint: Codable, Hashable {
+  var x: Double
+  var y: Double
+}
+
 struct NormalizedLayoutFrame: Codable, Hashable {
   var x: Double
   var y: Double
@@ -164,6 +212,20 @@ struct NormalizedLayoutFrame: Codable, Hashable {
     y = Double(rect.minY / max(size.height, 1))
     width = Double(rect.width / max(size.width, 1))
     height = Double(rect.height / max(size.height, 1))
+  }
+
+  init(x: Double, y: Double, width: Double, height: Double) {
+    self.x = x
+    self.y = y
+    self.width = width
+    self.height = height
+  }
+
+  var isValid: Bool {
+    x.isFinite && y.isFinite && width.isFinite && height.isFinite
+      && width > 0 && height > 0
+      && x >= -0.000_001 && y >= -0.000_001
+      && x + width <= 1.000_001 && y + height <= 1.000_001
   }
 
   func rect(in size: CGSize) -> CGRect {

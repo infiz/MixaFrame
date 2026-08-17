@@ -348,9 +348,13 @@ final class LayoutEngineTests: XCTestCase {
 
     let reloadedStore = AppStore(rootDirectory: directory)
     let reloadedTask = try XCTUnwrap(reloadedStore.project(id: projectID)?.tasks.first)
-    let reloadedPhoto = try XCTUnwrap(reloadedTask.photos.first)
-    XCTAssertNotNil(reloadedStore.thumbnailImage(for: reloadedPhoto))
-    XCTAssertNotNil(reloadedStore.previewImage(for: reloadedPhoto))
+    XCTAssertNotNil(reloadedTask.savedLayoutSnapshot)
+    reloadedStore.preloadPersistedThumbnails(for: reloadedTask.photos)
+    XCTAssertTrue(reloadedTask.photos.allSatisfy { reloadedStore.thumbnailImage(for: $0) != nil })
+    XCTAssertTrue(reloadedTask.photos.allSatisfy { reloadedStore.previewImage(for: $0) != nil })
+    await reloadedStore.prepareDerivedImages(for: reloadedTask.photos)
+    XCTAssertTrue(reloadedTask.photos.allSatisfy { reloadedStore.thumbnailImage(for: $0) != nil })
+    XCTAssertTrue(reloadedTask.photos.allSatisfy { reloadedStore.previewImage(for: $0) != nil })
     let reloadedThumbnail = try XCTUnwrap(
       reloadedStore.collageThumbnailImage(for: reloadedTask)
     )
@@ -471,6 +475,135 @@ final class LayoutEngineTests: XCTestCase {
     }
   }
 
+  func testNewPartitionLayoutsFillCanvasWithoutOverlap() {
+    let size = CGSize(width: 1200, height: 900)
+    var testedLayoutCount = 0
+
+    for photoCount in 3...12 {
+      var task = CollageTask.new(projectID: UUID())
+      task.photos = (0..<photoCount).map { index in
+        CollagePhoto(
+          fileName: "partition-\(photoCount)-\(index)",
+          pixelWidth: index.isMultiple(of: 2) ? 1600 : 1000,
+          pixelHeight: index.isMultiple(of: 2) ? 1000 : 1400
+        )
+      }
+      task.spacing = 0
+      task.isPhotoOrderManuallyAdjusted = true
+
+      for template in LayoutCatalog.templates(photoCount: photoCount) {
+        guard case .partition = template.recipe else { continue }
+        testedLayoutCount += 1
+        task.layoutID = template.id
+        task.clearLayoutCustomization()
+        let frames = LayoutEngine.frames(for: task, in: size)
+
+        XCTAssertEqual(frames.count, photoCount, template.id)
+        XCTAssertEqual(
+          frames.reduce(CGFloat.zero) { $0 + $1.width * $1.height },
+          size.width * size.height,
+          accuracy: 2,
+          template.id
+        )
+        XCTAssertTrue(
+          frames.allSatisfy {
+            $0.minX >= -0.01 && $0.minY >= -0.01
+              && $0.maxX <= size.width + 0.01 && $0.maxY <= size.height + 0.01
+          },
+          template.id
+        )
+        for first in frames.indices {
+          for second in frames.indices where second > first {
+            let overlap = frames[first].intersection(frames[second])
+            XCTAssertTrue(
+              overlap.isNull || overlap.width * overlap.height < 0.01,
+              "\(template.id) overlaps frames \(first) and \(second)"
+            )
+          }
+        }
+        XCTAssertFalse(LayoutEngine.layoutDividers(for: task, in: size).isEmpty, template.id)
+      }
+    }
+
+    XCTAssertGreaterThan(testedLayoutCount, 25)
+  }
+
+  func testCustomCutsResizeAndPersistWithTask() throws {
+    var task = CollageTask.new(projectID: UUID())
+    task.photos = (0..<3).map {
+      CollagePhoto(fileName: "custom-\($0)", pixelWidth: 1200, pixelHeight: 900)
+    }
+    task.spacing = 0
+    task.isPhotoOrderManuallyAdjusted = true
+    task.layoutID = LayoutCatalog.customTemplate(photoCount: 3).id
+    task.customLayoutFrames = [
+      NormalizedLayoutFrame(x: 0, y: 0, width: 0.6, height: 1),
+      NormalizedLayoutFrame(x: 0.6, y: 0, width: 0.4, height: 0.5),
+      NormalizedLayoutFrame(x: 0.6, y: 0.5, width: 0.4, height: 0.5),
+    ]
+    task.savedCustomLayoutID = UUID()
+
+    let size = CGSize(width: 1000, height: 1000)
+    let frames = LayoutEngine.frames(for: task, in: size)
+    XCTAssertEqual(frames[0], CGRect(x: 0, y: 0, width: 600, height: 1000))
+    let divider = try XCTUnwrap(
+      LayoutEngine.layoutDividers(for: task, in: size).first(where: {
+        $0.axis == .vertical && $0.start.y < 1 && $0.end.y > 999
+      })
+    )
+    task.customLayoutFrames = try XCTUnwrap(
+      LayoutEngine.adjustedCustomLayoutFrames(
+        for: task,
+        moving: divider,
+        normalizedDelta: 0.1
+      )
+    )
+    let resized = LayoutEngine.frames(for: task, in: size)
+    XCTAssertEqual(resized[0].width, 700, accuracy: 0.5)
+    XCTAssertEqual(resized[1].minX, 700, accuracy: 0.5)
+
+    let decoded = try JSONDecoder().decode(
+      CollageTask.self,
+      from: JSONEncoder().encode(task)
+    )
+    XCTAssertEqual(decoded.customLayoutFrames, task.customLayoutFrames)
+    XCTAssertEqual(decoded.savedCustomLayoutID, task.savedCustomLayoutID)
+  }
+
+  @MainActor
+  func testReusableCustomLayoutsPersistRenameDuplicateAndDelete() throws {
+    let directory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("MixaFrameCustomLayouts-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let frames = [
+      NormalizedLayoutFrame(x: 0, y: 0, width: 0.5, height: 1),
+      NormalizedLayoutFrame(x: 0.5, y: 0, width: 0.5, height: 1),
+    ]
+
+    let store = AppStore(rootDirectory: directory)
+    let originalID = try XCTUnwrap(
+      store.createCustomLayout(name: "Pair", photoCount: 2, frames: frames)
+    )
+    store.updateCustomLayout(id: originalID, name: "Side Pair")
+    let duplicateID = try XCTUnwrap(store.duplicateCustomLayout(id: originalID))
+    XCTAssertEqual(store.savedCustomLayouts.count, 2)
+
+    let reloadedStore = AppStore(rootDirectory: directory)
+    XCTAssertEqual(reloadedStore.savedCustomLayouts.count, 2)
+    XCTAssertEqual(
+      reloadedStore.savedCustomLayouts.first(where: { $0.id == originalID })?.name,
+      "Side Pair"
+    )
+    XCTAssertEqual(
+      reloadedStore.savedCustomLayouts.first(where: { $0.id == duplicateID })?.frames,
+      frames
+    )
+
+    reloadedStore.deleteCustomLayout(id: duplicateID)
+    let finalStore = AppStore(rootDirectory: directory)
+    XCTAssertEqual(finalStore.savedCustomLayouts.map(\.id), [originalID])
+  }
+
   func testIrregularLayoutDividerOverridesResizeAndPersist() throws {
     var task = CollageTask.new(projectID: UUID())
     task.photos = (0..<6).map { index in
@@ -506,6 +639,58 @@ final class LayoutEngineTests: XCTestCase {
       from: JSONEncoder().encode(task)
     )
     XCTAssertEqual(decoded.layoutFrameOverrides, task.layoutFrameOverrides)
+  }
+
+  func testSavedLayoutGeometrySurvivesDeletedCatalogTemplate() throws {
+    var task = CollageTask.new(projectID: UUID())
+    task.canvas = .portrait
+    task.spacing = 14
+    task.isPhotoOrderManuallyAdjusted = true
+    task.photos = (0..<6).map { index in
+      CollagePhoto(
+        fileName: "photo-\(index)",
+        pixelWidth: index.isMultiple(of: 2) ? 1600 : 1000,
+        pixelHeight: index.isMultiple(of: 2) ? 1000 : 1600
+      )
+    }
+    let template = try XCTUnwrap(
+      LayoutCatalog.templates(photoCount: 6).first(where: { $0.family == .slanted })
+    )
+    task.layoutID = template.id
+    let originalSize = LayoutEngine.outputSize(for: task)
+    let originalFrames = LayoutEngine.layoutFrames(for: task, in: originalSize)
+    XCTAssertTrue(originalFrames.contains { $0.normalizedClipPolygon != nil })
+
+    var snapshot = try XCTUnwrap(LayoutEngine.savedLayoutSnapshot(for: task))
+    snapshot.sourceLayoutID = "n6-removed-from-future-catalog"
+    snapshot.sourceLayoutTitle = "Saved Slanted Layout"
+    task.layoutID = snapshot.sourceLayoutID
+    task.savedLayoutSnapshot = snapshot
+
+    let decoded = try JSONDecoder().decode(
+      CollageTask.self,
+      from: JSONEncoder().encode(task)
+    )
+    XCTAssertEqual(LayoutEngine.outputSize(for: decoded), originalSize)
+    XCTAssertEqual(LayoutEngine.selectedTemplate(for: decoded).title, "Saved Slanted Layout")
+    let restoredFrames = LayoutEngine.layoutFrames(for: decoded, in: originalSize)
+    XCTAssertEqual(restoredFrames.count, originalFrames.count)
+    for (original, restored) in zip(originalFrames, restoredFrames) {
+      XCTAssertEqual(restored.rect.minX, original.rect.minX, accuracy: 0.001)
+      XCTAssertEqual(restored.rect.minY, original.rect.minY, accuracy: 0.001)
+      XCTAssertEqual(restored.rect.width, original.rect.width, accuracy: 0.001)
+      XCTAssertEqual(restored.rect.height, original.rect.height, accuracy: 0.001)
+      XCTAssertEqual(restored.normalizedClipPolygon, original.normalizedClipPolygon)
+      XCTAssertEqual(restored.rotationDegrees, original.rotationDegrees, accuracy: 0.001)
+      XCTAssertEqual(restored.cornerRadiusFraction, original.cornerRadiusFraction, accuracy: 0.001)
+      XCTAssertEqual(restored.usesAspectFit, original.usesAspectFit)
+    }
+    XCTAssertTrue(
+      LayoutEngine.layoutDividers(for: decoded, in: originalSize).allSatisfy {
+        if case .frames = $0.adjustment { return true }
+        return false
+      }
+    )
   }
 
   func testSmartGridUsesThreeCompleteRowsForTwelveLandscapePhotos() throws {
@@ -911,13 +1096,73 @@ final class LayoutEngineTests: XCTestCase {
     XCTAssertEqual(total, LayoutCatalog.totalTemplateCount)
   }
 
+  func testCatalogOmitsCloseLayoutVariantsAndMigratesTheirSelections() {
+    let singlePhotoLayouts = LayoutCatalog.templates(photoCount: 1)
+    XCTAssertEqual(
+      Set(singlePhotoLayouts.map(\.id)),
+      ["n1-full-bleed", "n1-gallery-matte"]
+    )
+    XCTAssertEqual(
+      LayoutCatalog.compatibleTemplate(id: "n1-poster-matte", photoCount: 1)?.id,
+      "n1-gallery-matte"
+    )
+
+    let expectedSlantedTitles: [Int: Set<String>] = [
+      2: ["Gentle Cascade", "Gentle Rise", "Bold Cascade", "Zigzag Mosaic"],
+      3: [
+        "Gentle Cascade", "Gentle Rise", "Bold Cascade", "Zigzag Mosaic", "Lead Mosaic",
+        "Finale Mosaic",
+      ],
+    ]
+    for photoCount in 2...12 {
+      let layouts = LayoutCatalog.templates(photoCount: photoCount)
+      let mondrianSeeds = Set(
+        layouts.compactMap { layout -> Int? in
+          guard case .mosaic(let seed) = layout.recipe else { return nil }
+          return seed
+        })
+      XCTAssertEqual(mondrianSeeds, [0, 1, 5, 6])
+      XCTAssertFalse(layouts.contains(where: { $0.title == "Bold Brick" }))
+
+      if let expectedTitles = expectedSlantedTitles[photoCount] {
+        XCTAssertEqual(
+          Set(layouts.filter { $0.family == .slanted }.map(\.title)),
+          expectedTitles
+        )
+      }
+    }
+
+    XCTAssertNil(LayoutCatalog.template(id: "n3-featured-corner-anchor-main-2", photoCount: 3))
+    XCTAssertNil(LayoutCatalog.template(id: "n4-featured-corner-anchor-main-3", photoCount: 4))
+    XCTAssertNil(LayoutCatalog.template(id: "n4-featured-dual-anchor-main-3", photoCount: 4))
+    for photoCount in 5...6 {
+      for mainCount in 1...3 {
+        XCTAssertNil(
+          LayoutCatalog.template(
+            id: "n\(photoCount)-featured-center-window-main-\(mainCount)",
+            photoCount: photoCount
+          ))
+      }
+    }
+    XCTAssertNotNil(LayoutCatalog.template(id: "n7-featured-center-window-main-1", photoCount: 7))
+
+    XCTAssertEqual(
+      LayoutCatalog.compatibleTemplate(id: "n5-featured-center-window-main-2", photoCount: 5)?.id,
+      "n5-editorial-three-row-center-main-2"
+    )
+    XCTAssertEqual(
+      LayoutCatalog.compatibleTemplate(id: "n8-mondrian-2", photoCount: 8)?.id,
+      "n8-mondrian-6"
+    )
+    XCTAssertEqual(
+      LayoutCatalog.compatibleTemplate(id: "n8-brick-bold", photoCount: 8)?.id,
+      "n8-brick-soft"
+    )
+  }
+
   func testSlantedLayoutsReplaceCreativeLayoutsForEveryPhotoCount() {
     for photoCount in 1...12 {
       let layouts = LayoutCatalog.templates(photoCount: photoCount)
-      XCTAssertTrue(
-        layouts.contains(where: { $0.family == .slanted }),
-        "Missing slanted layout for \(photoCount) photos"
-      )
       XCTAssertFalse(
         layouts.contains(where: {
           switch $0.recipe {
@@ -928,8 +1173,12 @@ final class LayoutEngineTests: XCTestCase {
         "Creative card and bubble layouts should not be offered"
       )
 
-      guard photoCount > 1 else { continue }
-      XCTAssertEqual(layouts.filter { $0.family == .slanted }.count, 9)
+      guard photoCount > 1 else {
+        XCTAssertFalse(layouts.contains(where: { $0.family == .slanted }))
+        continue
+      }
+      let expectedCount = photoCount == 2 ? 4 : (photoCount == 3 ? 6 : 9)
+      XCTAssertEqual(layouts.filter { $0.family == .slanted }.count, expectedCount)
       var task = CollageTask.new(projectID: UUID())
       task.photos = (0..<photoCount).map {
         CollagePhoto(fileName: "photo-\($0)", pixelWidth: 1200, pixelHeight: 900)
@@ -971,7 +1220,16 @@ final class LayoutEngineTests: XCTestCase {
     for photoCount in 2...12 {
       let layouts = LayoutCatalog.templates(photoCount: photoCount)
       let heroLayouts = layouts.filter { $0.family == .hero }
-      XCTAssertEqual(heroLayouts.count, 4 * min(3, photoCount - 1))
+      let maximumMainCount = min(3, photoCount - 1)
+      let anchorMainCount = min(3, max(0, photoCount - 2))
+      let featuredLayoutCount =
+        (photoCount >= 3 ? anchorMainCount : 0)
+        + (photoCount >= 4 ? anchorMainCount : 0)
+        + (photoCount >= 7 ? maximumMainCount : 0)
+      XCTAssertEqual(
+        heroLayouts.count,
+        4 * maximumMainCount + featuredLayoutCount
+      )
       let heroStructures = Set(
         heroLayouts.compactMap { template -> String? in
           switch template.recipe {
@@ -979,6 +1237,8 @@ final class LayoutEngineTests: XCTestCase {
             return "\(edge)-1"
           case .multiHero(let edge, let mainCount, _):
             return "\(edge)-\(mainCount)"
+          case .partition(let style, let mainCount):
+            return "\(style.rawValue)-\(mainCount ?? 0)"
           default:
             return nil
           }
@@ -1039,6 +1299,12 @@ final class LayoutEngineTests: XCTestCase {
               mainCount,
               "\(template.id) did not apply \(mainCount) main photos"
             )
+          case .partition(_, let resolvedMainCount):
+            XCTAssertEqual(
+              resolvedMainCount,
+              mainCount,
+              "\(template.id) did not apply \(mainCount) main photos"
+            )
           default:
             XCTFail("\(template.id) does not expose an adjustable main-photo recipe")
           }
@@ -1059,7 +1325,14 @@ final class LayoutEngineTests: XCTestCase {
           photoCount: photoCount,
           mainPhotoCount: mainCount
         )
-        XCTAssertEqual(featuredSamples.count, photoCount >= 5 ? 10 : 4)
+        let featuredStyleCount =
+          (photoCount >= 3 && photoCount - mainCount > 1 ? 1 : 0)
+          + (photoCount >= 4 && photoCount - mainCount > 1 ? 1 : 0)
+          + (photoCount >= 7 ? 1 : 0)
+        XCTAssertEqual(
+          featuredSamples.count,
+          4 + featuredStyleCount + (photoCount >= 5 ? 6 : 0)
+        )
         XCTAssertTrue(
           featuredSamples.allSatisfy { LayoutEngine.mainPhotoCount(for: $0) == mainCount }
         )
@@ -1074,6 +1347,49 @@ final class LayoutEngineTests: XCTestCase {
           )
           XCTAssertEqual(LayoutEngine.mainPhotoCount(for: matching), mainCount)
         }
+      }
+    }
+  }
+
+  func testFeaturedBrowserShowsEveryMainCountWithoutDuplicateGeometry() {
+    for photoCount in 2...12 {
+      var task = CollageTask.new(projectID: UUID())
+      task.canvas = .square
+      task.spacing = 0
+      task.isPhotoOrderManuallyAdjusted = true
+      task.photos = (0..<photoCount).map { index in
+        CollagePhoto(
+          fileName: "photo-\(index)",
+          pixelWidth: index.isMultiple(of: 2) ? 1600 : 1000,
+          pixelHeight: index.isMultiple(of: 2) ? 1000 : 1600
+        )
+      }
+
+      let layouts = LayoutEngine.fittingLayoutSamples(family: .hero, task: task)
+      XCTAssertEqual(
+        Set(layouts.compactMap(LayoutEngine.mainPhotoCount(for:))),
+        Set(1...min(3, photoCount - 1))
+      )
+
+      var geometryKeys: Set<String> = []
+      for template in layouts {
+        task.layoutID = template.id
+        task.mainPhotoCount = LayoutEngine.mainPhotoCount(for: template)
+        let size = LayoutEngine.outputSize(for: task)
+        let frameKeys = LayoutEngine.layoutFrames(for: task, in: size).map { frame in
+          let values = [
+            frame.rect.minX / size.width,
+            frame.rect.minY / size.height,
+            frame.rect.width / size.width,
+            frame.rect.height / size.height,
+          ]
+          return values.map { String(format: "%.4f", Double($0)) }.joined(separator: ",")
+        }
+        let key = frameKeys.sorted().joined(separator: "|")
+        XCTAssertTrue(
+          geometryKeys.insert(key).inserted,
+          "Featured browser contains duplicate geometry for \(template.id)"
+        )
       }
     }
   }
@@ -1194,6 +1510,61 @@ final class LayoutEngineTests: XCTestCase {
       XCTAssertGreaterThan(try Data(contentsOf: result).count, 100)
       try? FileManager.default.removeItem(at: result)
     }
+  }
+
+  func testFreeExportIncludesWatermarkAndPremiumRenderDoesNot() throws {
+    let directory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("MixaFrameWatermarkTests-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    let sourceNames = ["first.image", "second.image"]
+    for name in sourceNames {
+      let image = UIGraphicsImageRenderer(size: CGSize(width: 160, height: 100)).image { context in
+        UIColor.systemIndigo.setFill()
+        context.fill(CGRect(x: 0, y: 0, width: 160, height: 100))
+      }
+      try XCTUnwrap(image.pngData()).write(to: directory.appendingPathComponent(name))
+    }
+
+    var task = CollageTask.new(projectID: UUID())
+    task.outputMaxDimension = 512
+    task.outputFormat = .png
+    task.photos = sourceNames.map {
+      CollagePhoto(fileName: $0, pixelWidth: 160, pixelHeight: 100)
+    }
+
+    let premiumImage = try CollageRenderer.render(task: task, photoDirectory: directory)
+    let freeImage = try CollageRenderer.render(
+      task: task,
+      photoDirectory: directory,
+      includesWatermark: true
+    )
+    XCTAssertNotEqual(premiumImage.pngData(), freeImage.pngData())
+
+    let export = try CollageRenderer.prepareExport(
+      task: task,
+      photoDirectory: directory,
+      includesWatermark: true
+    )
+    defer { try? FileManager.default.removeItem(at: export.fileURL) }
+    XCTAssertTrue(export.includesWatermark)
+
+    XCTAssertEqual(
+      CollageRenderer.watermarkFontSize(
+        in: CGRect(origin: .zero, size: CGSize(width: 512, height: 512))
+      ),
+      20.48,
+      accuracy: 0.001
+    )
+    XCTAssertEqual(
+      CollageRenderer.watermarkFontSize(
+        in: CGRect(origin: .zero, size: CGSize(width: 4096, height: 4096))
+      ),
+      163.84,
+      accuracy: 0.001
+    )
+    XCTAssertTrue(CollageRenderer.watermarkFont(ofSize: 28).fontName.contains("AvenirNext"))
   }
 
   func testPreparedExportKeepsFullResolutionAndBoundsReviewImage() throws {

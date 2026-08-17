@@ -22,6 +22,7 @@ struct ProjectDetailView: View {
         } else {
           List(project.tasks) { task in
             Button {
+              store.preloadPersistedThumbnails(for: task.photos)
               editorRoute = EditorRoute(task: task)
             } label: {
               TaskRow(

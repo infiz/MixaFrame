@@ -4,6 +4,7 @@ import UIKit
 
 struct CollageEditorView: View {
   @EnvironmentObject private var store: AppStore
+  @EnvironmentObject private var subscriptions: SubscriptionStore
   @Environment(\.dismiss) private var dismiss
   @State private var draft: CollageTask
   @State private var savedSnapshot: CollageTask
@@ -21,6 +22,12 @@ struct CollageEditorView: View {
   @State private var exportPreview: PreparedCollageExport?
   @State private var originalPhotoPreview: CollagePhoto?
   @State private var message: EditorMessage?
+  @State private var showingSubscription = false
+  @State private var customLayoutBuilder: CustomLayoutBuilderRequest?
+  @State private var customLayoutNameRequest: CustomLayoutNameRequest?
+  @State private var pendingCustomLayoutName = ""
+  @State private var customLayoutPendingDeletion: SavedCustomLayout?
+  @State private var pendingExportAction: PendingExportAction?
 
   init(projectID: UUID, task: CollageTask?) {
     let initialTask = task ?? CollageTask.new(projectID: projectID)
@@ -29,7 +36,7 @@ struct CollageEditorView: View {
     _isControlsHidden = State(initialValue: task != nil)
     _activeEditorTool = State(initialValue: .photos)
     _selectedLayoutFamily = State(
-      initialValue: LayoutCatalog.selectedTemplate(for: initialTask).family.browserFamily)
+      initialValue: LayoutEngine.selectedTemplate(for: initialTask).family.browserFamily)
   }
 
   var body: some View {
@@ -90,7 +97,16 @@ struct CollageEditorView: View {
           .accessibilityLabel("Edit collage title")
           .disabled(isImporting || isSaving || isExporting)
         }
-        ToolbarItem(placement: .topBarTrailing) {
+        ToolbarItemGroup(placement: .topBarTrailing) {
+          Button {
+            requestExportAction(.openControls)
+          } label: {
+            Label("Export", systemImage: "square.and.arrow.up")
+              .labelStyle(.iconOnly)
+          }
+          .accessibilityHint("Opens export settings and preview options")
+          .disabled(isImporting || isSaving || isExporting)
+
           Button("Save") {
             beginSaving(dismissAfterSave: false)
           }
@@ -140,6 +156,10 @@ struct CollageEditorView: View {
       .sheet(item: $shareItem) { item in
         ShareSheet(items: [item.url])
       }
+      .sheet(isPresented: $showingSubscription) {
+        SubscriptionView()
+          .environmentObject(subscriptions)
+      }
       .fullScreenCover(item: $exportPreview) { export in
         ExportPreviewView(
           export: export,
@@ -159,6 +179,23 @@ struct CollageEditorView: View {
           onAdjustCropZoom: { adjustZoom(photoID: photo.id, zoom: $0) }
         )
       }
+      .fullScreenCover(item: $customLayoutBuilder) { request in
+        CustomLayoutBuilderView(
+          photoCount: draft.photos.count,
+          canvas: draft.canvas,
+          initialName: request.layout?.name ?? "Custom Layout",
+          initialFrames: request.layout?.frames,
+          updatesExistingLayout: request.layout != nil,
+          onComplete: { name, frames, savesLayout in
+            completeCustomLayoutBuilder(
+              request: request,
+              name: name,
+              frames: frames,
+              savesLayout: savesLayout
+            )
+          }
+        )
+      }
       .alert("Edit Collage Title", isPresented: $isRenamePresented) {
         TextField("Collage title", text: $pendingTitle)
         Button("Cancel", role: .cancel) {}
@@ -176,6 +213,55 @@ struct CollageEditorView: View {
         Alert(
           title: Text(message.title), message: Text(message.detail),
           dismissButton: .default(Text("OK")))
+      }
+      .alert(
+        customLayoutNameRequest?.title ?? "Layout Name",
+        isPresented: Binding(
+          get: { customLayoutNameRequest != nil },
+          set: { if !$0 { customLayoutNameRequest = nil } }
+        )
+      ) {
+        TextField("Layout name", text: $pendingCustomLayoutName)
+        Button("Cancel", role: .cancel) { customLayoutNameRequest = nil }
+        Button("Save") { completeCustomLayoutNameRequest() }
+          .disabled(pendingCustomLayoutName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+      }
+      .confirmationDialog(
+        "Delete Custom Layout?",
+        isPresented: Binding(
+          get: { customLayoutPendingDeletion != nil },
+          set: { if !$0 { customLayoutPendingDeletion = nil } }
+        ),
+        presenting: customLayoutPendingDeletion
+      ) { layout in
+        Button("Delete \"\(layout.name)\"", role: .destructive) {
+          deleteCustomLayout(layout)
+        }
+        Button("Cancel", role: .cancel) {}
+      } message: { layout in
+        Text(
+          "Existing collages keep their current frames. This removes the reusable layout from My Layouts."
+        )
+      }
+      .confirmationDialog(
+        "Save Changes Before Exporting?",
+        isPresented: Binding(
+          get: { pendingExportAction != nil },
+          set: { if !$0 { pendingExportAction = nil } }
+        ),
+        titleVisibility: .visible
+      ) {
+        Button("Save and Continue") {
+          saveAndContinueExportAction()
+        }
+        Button("Continue Without Saving") {
+          continueExportActionWithoutSaving()
+        }
+        Button("Cancel", role: .cancel) { pendingExportAction = nil }
+      } message: {
+        Text(
+          "This collage has changed since it was last saved. Save now so the exported image and saved task stay in sync."
+        )
       }
       .confirmationDialog(
         "Save changes before going back?",
@@ -332,6 +418,46 @@ struct CollageEditorView: View {
     .accessibilityAddTraits(activeEditorTool == tool ? .isSelected : [])
   }
 
+  private func openExportControls() {
+    hideKeyboard()
+    withAnimation(.easeInOut(duration: 0.2)) {
+      activeEditorTool = .output
+      isControlsHidden = false
+    }
+  }
+
+  private func requestExportAction(_ action: PendingExportAction) {
+    hideKeyboard()
+    guard draft.photos.count >= 2, hasUnsavedChanges else {
+      performExportAction(action)
+      return
+    }
+    pendingExportAction = action
+  }
+
+  private func saveAndContinueExportAction() {
+    guard let action = pendingExportAction else { return }
+    pendingExportAction = nil
+    beginSaving(dismissAfterSave: false) {
+      performExportAction(action)
+    }
+  }
+
+  private func continueExportActionWithoutSaving() {
+    guard let action = pendingExportAction else { return }
+    pendingExportAction = nil
+    performExportAction(action)
+  }
+
+  private func performExportAction(_ action: PendingExportAction) {
+    switch action {
+    case .openControls:
+      openExportControls()
+    case .preview:
+      beginExport()
+    }
+  }
+
   private var fullCanvasRestoreButton: some View {
     Button {
       toggleControls()
@@ -438,30 +564,8 @@ struct CollageEditorView: View {
         }
         .disabled(LayoutEngine.isNaturalVerticalStrip(draft))
 
+        customLayoutsSelector
         layoutSelector
-        if let mainPhotoCount = LayoutEngine.mainPhotoCount(for: draft) {
-          VStack(alignment: .leading, spacing: 6) {
-            HStack {
-              Text("Main Photos")
-              Spacer()
-              Text("\(mainPhotoCount)")
-                .foregroundStyle(.secondary)
-                .monospacedDigit()
-            }
-            Picker(
-              "Main Photos",
-              selection: Binding(
-                get: { mainPhotoCount },
-                set: { selectMainPhotoCount($0) }
-              )
-            ) {
-              ForEach(1...min(3, draft.photos.count - 1), id: \.self) { count in
-                Text("\(count)").tag(count)
-              }
-            }
-            .pickerStyle(.segmented)
-          }
-        }
         if LayoutEngine.isNaturalVerticalStrip(draft) {
           let outputWidth = Int(LayoutEngine.outputSize(for: draft).width)
           Label(
@@ -509,6 +613,7 @@ struct CollageEditorView: View {
                 if draft.spacing != spacing {
                   draft.spacing = spacing
                   draft.layoutFrameOverrides = nil
+                  draft.clearSavedLayoutSnapshot()
                 }
               }
             ),
@@ -621,28 +726,41 @@ struct CollageEditorView: View {
 
       Section {
         Button {
-          beginExport()
+          requestExportAction(.preview)
         } label: {
           Label("Preview Export", systemImage: "eye")
         }
+        if subscriptions.hasPremiumAccess {
+          Label("Premium export · No watermark", systemImage: "checkmark.seal.fill")
+            .foregroundStyle(.green)
+        } else {
+          Button {
+            showingSubscription = true
+          } label: {
+            Label("Free export · MixaFrame watermark included", systemImage: "crown")
+          }
+        }
       } footer: {
-        Text("Review, zoom, and move the finished image before saving or sharing it.")
+        Text(
+          subscriptions.hasPremiumAccess
+            ? "Review, zoom, and move the finished image before saving or sharing it."
+            : "Editing stays free. Start the 7-day trial to export without the MixaFrame watermark."
+        )
       }
-      .disabled(draft.photos.count < 2 || isExporting)
+      .disabled(
+        draft.photos.count < 2 || isExporting || !subscriptions.hasLoadedEntitlements
+      )
     }
   }
 
   private var layoutSelector: some View {
-    let preferredMainPhotoCount =
-      draft.mainPhotoCount ?? LayoutEngine.mainPhotoCount(for: draft) ?? 1
     let fittedLayouts = Dictionary(
       uniqueKeysWithValues: LayoutFamily.browserCases.map { family in
         (
           family,
           LayoutEngine.fittingLayoutSamples(
             family: family,
-            task: draft,
-            mainPhotoCount: preferredMainPhotoCount
+            task: draft
           )
         )
       }
@@ -661,7 +779,7 @@ struct CollageEditorView: View {
       HStack {
         Text("Layout")
         Spacer()
-        Text("\(selectedTemplate.title) · \(availableLayoutCount) best-fit")
+        Text("\(selectedTemplate.title) · \(availableLayoutCount) options")
           .font(.caption)
           .foregroundStyle(.secondary)
           .lineLimit(1)
@@ -717,9 +835,112 @@ struct CollageEditorView: View {
         .padding(.vertical, 2)
       }
 
-      Text("Ranked for these photos. Layouts that would crop too much are hidden.")
-        .font(.caption2)
+      Text(
+        displayedFamily == .hero
+          ? "All distinct Featured layouts are shown and ranked for these photos."
+          : "Ranked for these photos. Layouts that would crop too much are hidden."
+      )
+      .font(.caption2)
+      .foregroundStyle(.secondary)
+    }
+  }
+
+  private var customLayoutsSelector: some View {
+    let matchingLayouts = store.savedCustomLayouts.filter { $0.photoCount == draft.photos.count }
+    let selectedID = draft.savedCustomLayoutID
+
+    return VStack(alignment: .leading, spacing: 8) {
+      HStack {
+        Text("My Layouts")
+        Spacer()
+        Button {
+          customLayoutBuilder = CustomLayoutBuilderRequest(layout: nil)
+        } label: {
+          Label("Create", systemImage: "rectangle.split.2x2")
+        }
+        .disabled(draft.photos.count < 2)
+      }
+
+      if matchingLayouts.isEmpty {
+        Text(
+          draft.photos.count < 2
+            ? "Add at least two photos to create a custom layout."
+            : "Create reusable cuts for this photo count."
+        )
+        .font(.caption)
         .foregroundStyle(.secondary)
+      } else {
+        ScrollView(.horizontal, showsIndicators: false) {
+          LazyHStack(spacing: 9) {
+            ForEach(matchingLayouts) { layout in
+              Button {
+                applyCustomLayout(layout.frames, savedLayoutID: layout.id)
+              } label: {
+                VStack(spacing: 4) {
+                  CustomLayoutThumbnail(
+                    frames: layout.frames,
+                    canvas: draft.canvas,
+                    backgroundHex: draft.backgroundHex,
+                    isSelected: selectedID == layout.id
+                  )
+                  Text(layout.name)
+                    .font(.caption2)
+                    .lineLimit(1)
+                    .frame(width: 82)
+                }
+              }
+              .buttonStyle(.plain)
+              .accessibilityLabel(layout.name)
+              .accessibilityAddTraits(selectedID == layout.id ? .isSelected : [])
+              .contextMenu {
+                Button {
+                  customLayoutBuilder = CustomLayoutBuilderRequest(layout: layout)
+                } label: {
+                  Label("Edit Cuts", systemImage: "rectangle.split.2x2")
+                }
+                Button {
+                  beginRenamingCustomLayout(layout)
+                } label: {
+                  Label("Rename", systemImage: "pencil")
+                }
+                Button {
+                  _ = store.duplicateCustomLayout(id: layout.id)
+                } label: {
+                  Label("Duplicate", systemImage: "plus.square.on.square")
+                }
+                Button(role: .destructive) {
+                  customLayoutPendingDeletion = layout
+                } label: {
+                  Label("Delete", systemImage: "trash")
+                }
+              }
+            }
+          }
+          .padding(.vertical, 2)
+        }
+      }
+
+      if let customFrames = draft.customLayoutFrames,
+        customFrames.count == draft.photos.count
+      {
+        HStack {
+          Button {
+            beginSavingCurrentCustomLayout()
+          } label: {
+            Label("Save as New", systemImage: "square.and.arrow.down")
+          }
+          if let selectedID,
+            store.savedCustomLayouts.contains(where: { $0.id == selectedID })
+          {
+            Button {
+              store.updateCustomLayout(id: selectedID, frames: customFrames)
+            } label: {
+              Label("Update Saved", systemImage: "arrow.triangle.2.circlepath")
+            }
+          }
+        }
+        .font(.caption)
+      }
     }
   }
 
@@ -727,6 +948,8 @@ struct CollageEditorView: View {
     guard draft.layoutID != template.id else { return }
     withAnimation(.easeInOut(duration: 0.2)) {
       draft.layoutID = template.id
+      draft.clearCustomLayout()
+      draft.clearSavedLayoutSnapshot()
       switch template.recipe {
       case .hero:
         draft.mainPhotoCount = 1
@@ -737,6 +960,8 @@ struct CollageEditorView: View {
         if counts.indices.contains(mainIndex) {
           draft.mainPhotoCount = min(3, max(1, counts[mainIndex]))
         }
+      case .partition(_, let mainCount):
+        draft.mainPhotoCount = mainCount
       default:
         break
       }
@@ -756,27 +981,7 @@ struct CollageEditorView: View {
     guard draft.canvas != canvas else { return }
     withAnimation(.easeInOut(duration: 0.2)) {
       draft.canvas = canvas
-      refitPhotosForCurrentLayout()
-    }
-  }
-
-  private func selectMainPhotoCount(_ count: Int) {
-    let resolvedCount = min(max(1, count), max(1, min(3, draft.photos.count - 1)))
-    guard
-      draft.mainPhotoCount != resolvedCount
-        || LayoutEngine.mainPhotoCount(for: draft) != resolvedCount
-    else { return }
-    withAnimation(.easeInOut(duration: 0.2)) {
-      let selectedTemplate = LayoutCatalog.selectedTemplate(for: draft)
-      if let matchingTemplate = LayoutEngine.matchingMainPhotoTemplate(
-        for: selectedTemplate,
-        photoCount: draft.photos.count,
-        mainPhotoCount: resolvedCount
-      ) {
-        draft.layoutID = matchingTemplate.id
-      }
-      draft.mainPhotoCount = resolvedCount
-      resetLayoutDividerSizes()
+      draft.clearSavedLayoutSnapshot()
       refitPhotosForCurrentLayout()
     }
   }
@@ -787,6 +992,29 @@ struct CollageEditorView: View {
 
   private func adjustLayoutDivider(_ divider: LayoutDivider, delta: Double) {
     guard abs(delta) > 0.000_01 else { return }
+    if var snapshot = LayoutEngine.activeSavedLayoutSnapshot(for: draft),
+      let adjustedFrames = LayoutEngine.adjustedSavedLayoutFrames(
+        for: draft,
+        moving: divider,
+        normalizedDelta: delta
+      )
+    {
+      snapshot.frames = adjustedFrames
+      draft.savedLayoutSnapshot = snapshot
+      draft.invalidateExport()
+      return
+    }
+    if draft.customLayoutFrames != nil,
+      case .custom = LayoutEngine.selectedTemplate(for: draft).recipe
+    {
+      draft.customLayoutFrames = LayoutEngine.adjustedCustomLayoutFrames(
+        for: draft,
+        moving: divider,
+        normalizedDelta: delta
+      )
+      draft.invalidateExport()
+      return
+    }
     if case .frames = divider.adjustment {
       draft.layoutFrameOverrides = LayoutEngine.adjustedFrameOverrides(
         for: draft,
@@ -855,7 +1083,86 @@ struct CollageEditorView: View {
   }
 
   private func resetLayoutDividerSizes() {
+    draft.clearSavedLayoutSnapshot()
     draft.clearLayoutCustomization(invalidateExport: true)
+  }
+
+  private func completeCustomLayoutBuilder(
+    request: CustomLayoutBuilderRequest,
+    name: String,
+    frames: [NormalizedLayoutFrame],
+    savesLayout: Bool
+  ) {
+    var savedLayoutID: UUID?
+    if savesLayout {
+      if let existing = request.layout {
+        store.updateCustomLayout(id: existing.id, name: name, frames: frames)
+        savedLayoutID = existing.id
+      } else {
+        savedLayoutID = store.createCustomLayout(
+          name: name,
+          photoCount: draft.photos.count,
+          frames: frames
+        )
+      }
+    }
+    applyCustomLayout(frames, savedLayoutID: savedLayoutID)
+    customLayoutBuilder = nil
+  }
+
+  private func applyCustomLayout(
+    _ frames: [NormalizedLayoutFrame],
+    savedLayoutID: UUID?
+  ) {
+    guard frames.count == draft.photos.count, frames.allSatisfy(\.isValid) else { return }
+    withAnimation(.easeInOut(duration: 0.2)) {
+      draft.clearLayoutCustomization(invalidateExport: true)
+      draft.clearSavedLayoutSnapshot()
+      draft.layoutID = LayoutCatalog.customTemplate(photoCount: draft.photos.count).id
+      draft.layout = .smartGrid
+      draft.mainPhotoCount = nil
+      draft.customLayoutFrames = frames
+      draft.savedCustomLayoutID = savedLayoutID
+      draft.resetPhotosForAutomaticFit()
+      lockCurrentAutomaticArrangement()
+    }
+  }
+
+  private func beginSavingCurrentCustomLayout() {
+    pendingCustomLayoutName = "Custom Layout"
+    customLayoutNameRequest = CustomLayoutNameRequest(action: .saveCurrent)
+  }
+
+  private func beginRenamingCustomLayout(_ layout: SavedCustomLayout) {
+    pendingCustomLayoutName = layout.name
+    customLayoutNameRequest = CustomLayoutNameRequest(action: .rename(layout.id))
+  }
+
+  private func completeCustomLayoutNameRequest() {
+    guard let request = customLayoutNameRequest else { return }
+    let name = pendingCustomLayoutName.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !name.isEmpty else { return }
+    switch request.action {
+    case .saveCurrent:
+      guard let frames = draft.customLayoutFrames else { break }
+      let id = store.createCustomLayout(
+        name: name,
+        photoCount: draft.photos.count,
+        frames: frames
+      )
+      draft.savedCustomLayoutID = id
+    case .rename(let id):
+      store.updateCustomLayout(id: id, name: name)
+    }
+    customLayoutNameRequest = nil
+  }
+
+  private func deleteCustomLayout(_ layout: SavedCustomLayout) {
+    store.deleteCustomLayout(id: layout.id)
+    if draft.savedCustomLayoutID == layout.id {
+      draft.savedCustomLayoutID = nil
+    }
+    customLayoutPendingDeletion = nil
   }
 
   private func toggleControls() {
@@ -870,11 +1177,14 @@ struct CollageEditorView: View {
   }
 
   private func saveDraft() {
-    store.saveTask(draft)
+    draft = store.saveTask(draft)
     savedSnapshot = draft
   }
 
-  private func beginSaving(dismissAfterSave: Bool) {
+  private func beginSaving(
+    dismissAfterSave: Bool,
+    completion: (() -> Void)? = nil
+  ) {
     guard !isSaving else { return }
     hideKeyboard()
     isSaving = true
@@ -886,6 +1196,7 @@ struct CollageEditorView: View {
         dismiss()
       } else {
         isSaving = false
+        completion?()
       }
     }
   }
@@ -945,6 +1256,8 @@ struct CollageEditorView: View {
         failures += outcomes.count - importedPhotos.count
         if !importedPhotos.isEmpty {
           draft.clearLayoutCustomization(invalidateExport: true)
+          draft.clearCustomLayout()
+          draft.clearSavedLayoutSnapshot()
           draft.photos.append(contentsOf: importedPhotos)
         }
       }
@@ -965,6 +1278,8 @@ struct CollageEditorView: View {
   private func applyAutomaticRecommendations() {
     draft.isPhotoOrderManuallyAdjusted = false
     draft.clearLayoutCustomization()
+    draft.clearCustomLayout()
+    draft.clearSavedLayoutSnapshot()
     let recommendation = LayoutEngine.recommendedCanvasAndTemplate(for: draft)
     draft.canvas = recommendation.canvas
     draft.layout = .smartGrid
@@ -976,6 +1291,8 @@ struct CollageEditorView: View {
     let removedPhoto = draft.photos.first { $0.id == id }
     draft.photos.removeAll { $0.id == id }
     draft.clearLayoutCustomization(invalidateExport: true)
+    draft.clearCustomLayout()
+    draft.clearSavedLayoutSnapshot()
     if let removedPhoto {
       store.discardPhotoIfUnreferenced(removedPhoto)
     }
@@ -1072,6 +1389,7 @@ struct CollageEditorView: View {
     let task = draft
     let photoDirectory = store.photoDirectory
     let projectName = store.project(id: task.projectID)?.name ?? "Project"
+    let includesWatermark = !subscriptions.hasPremiumAccess
 
     Task {
       do {
@@ -1079,7 +1397,8 @@ struct CollageEditorView: View {
           try CollageRenderer.prepareExport(
             task: task,
             photoDirectory: photoDirectory,
-            projectName: projectName
+            projectName: projectName,
+            includesWatermark: includesWatermark
           )
         }.value
         exportPreview = export
@@ -1203,6 +1522,261 @@ private struct LayoutThumbnail: View {
   }
 }
 
+private struct CustomLayoutThumbnail: View {
+  let frames: [NormalizedLayoutFrame]
+  let canvas: CanvasPreset
+  let backgroundHex: String
+  let isSelected: Bool
+
+  private let displaySize = CGSize(width: 76, height: 52)
+
+  var body: some View {
+    let ratio = canvas.aspectRatio
+    let canvasSize: CGSize =
+      ratio >= displaySize.width / displaySize.height
+      ? CGSize(width: displaySize.width, height: displaySize.width / ratio)
+      : CGSize(width: displaySize.height * ratio, height: displaySize.height)
+    let origin = CGPoint(
+      x: (displaySize.width - canvasSize.width) / 2,
+      y: (displaySize.height - canvasSize.height) / 2
+    )
+
+    ZStack(alignment: .topLeading) {
+      Color(uiColor: .tertiarySystemBackground)
+      Color(uiColor: UIColor(hex: backgroundHex))
+        .frame(width: canvasSize.width, height: canvasSize.height)
+        .offset(x: origin.x, y: origin.y)
+      ForEach(Array(frames.enumerated()), id: \.offset) { index, frame in
+        let rect = CGRect(
+          x: origin.x + CGFloat(frame.x) * canvasSize.width,
+          y: origin.y + CGFloat(frame.y) * canvasSize.height,
+          width: CGFloat(frame.width) * canvasSize.width,
+          height: CGFloat(frame.height) * canvasSize.height
+        ).insetBy(dx: 0.7, dy: 0.7)
+        Rectangle()
+          .fill(Color.indigo.opacity(index.isMultiple(of: 2) ? 0.78 : 0.48))
+          .frame(width: max(1, rect.width), height: max(1, rect.height))
+          .offset(x: rect.minX, y: rect.minY)
+      }
+    }
+    .frame(width: displaySize.width, height: displaySize.height)
+    .clipped()
+    .overlay {
+      RoundedRectangle(cornerRadius: 8)
+        .stroke(
+          isSelected ? Color.indigo : Color.secondary.opacity(0.25),
+          lineWidth: isSelected ? 3 : 1
+        )
+    }
+  }
+}
+
+private struct CustomLayoutBuilderView: View {
+  @Environment(\.dismiss) private var dismiss
+  let photoCount: Int
+  let canvas: CanvasPreset
+  let updatesExistingLayout: Bool
+  let onComplete: (String, [NormalizedLayoutFrame], Bool) -> Void
+
+  @State private var name: String
+  @State private var frames: [NormalizedLayoutFrame]
+  @State private var selectedIndex = 0
+  @State private var history: [[NormalizedLayoutFrame]] = []
+
+  init(
+    photoCount: Int,
+    canvas: CanvasPreset,
+    initialName: String,
+    initialFrames: [NormalizedLayoutFrame]?,
+    updatesExistingLayout: Bool,
+    onComplete: @escaping (String, [NormalizedLayoutFrame], Bool) -> Void
+  ) {
+    self.photoCount = max(1, min(photoCount, 12))
+    self.canvas = canvas
+    self.updatesExistingLayout = updatesExistingLayout
+    self.onComplete = onComplete
+    _name = State(initialValue: initialName)
+    let validInitial =
+      initialFrames?.count == photoCount
+      && initialFrames?.allSatisfy(\.isValid) == true
+    _frames = State(
+      initialValue: validInitial
+        ? initialFrames ?? []
+        : [NormalizedLayoutFrame(x: 0, y: 0, width: 1, height: 1)]
+    )
+  }
+
+  var body: some View {
+    NavigationStack {
+      VStack(spacing: 18) {
+        GeometryReader { proxy in
+          let canvasSize = fittedCanvasSize(in: proxy.size)
+          let origin = CGPoint(
+            x: (proxy.size.width - canvasSize.width) / 2,
+            y: (proxy.size.height - canvasSize.height) / 2
+          )
+          ZStack(alignment: .topLeading) {
+            Color(uiColor: .secondarySystemBackground)
+              .frame(width: canvasSize.width, height: canvasSize.height)
+              .offset(x: origin.x, y: origin.y)
+            ForEach(Array(frames.enumerated()), id: \.offset) { index, frame in
+              let rect = CGRect(
+                x: origin.x + CGFloat(frame.x) * canvasSize.width,
+                y: origin.y + CGFloat(frame.y) * canvasSize.height,
+                width: CGFloat(frame.width) * canvasSize.width,
+                height: CGFloat(frame.height) * canvasSize.height
+              ).insetBy(dx: 2, dy: 2)
+              Button {
+                selectedIndex = index
+              } label: {
+                ZStack {
+                  Rectangle()
+                    .fill(Color.indigo.opacity(index.isMultiple(of: 2) ? 0.72 : 0.48))
+                  Text("\(index + 1)")
+                    .font(.headline)
+                    .foregroundStyle(.white)
+                }
+                .overlay {
+                  Rectangle()
+                    .stroke(index == selectedIndex ? Color.yellow : Color.clear, lineWidth: 4)
+                }
+              }
+              .buttonStyle(.plain)
+              .frame(width: max(1, rect.width), height: max(1, rect.height))
+              .offset(x: rect.minX, y: rect.minY)
+              .accessibilityLabel("Frame \(index + 1)")
+              .accessibilityAddTraits(index == selectedIndex ? .isSelected : [])
+            }
+          }
+        }
+        .frame(maxHeight: 430)
+        .padding(.horizontal)
+
+        VStack(spacing: 12) {
+          HStack {
+            Label("\(frames.count) of \(photoCount) frames", systemImage: "photo.on.rectangle")
+            Spacer()
+            Button("Undo", action: undo)
+              .disabled(history.isEmpty)
+            Button("Start Over", action: reset)
+          }
+
+          HStack(spacing: 12) {
+            Button {
+              splitSelected(axis: .vertical)
+            } label: {
+              Label("Side by Side", systemImage: "rectangle.split.2x1")
+                .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+            Button {
+              splitSelected(axis: .horizontal)
+            } label: {
+              Label("Stack", systemImage: "rectangle.split.1x2")
+                .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+          }
+          .disabled(frames.count >= photoCount)
+
+          TextField("Layout name", text: $name)
+            .textFieldStyle(.roundedBorder)
+
+          if frames.count < photoCount {
+            Text("Select a frame and split it. Add \(photoCount - frames.count) more cut(s).")
+              .font(.caption)
+              .foregroundStyle(.secondary)
+          } else {
+            Text("Apply the layout, then drag its dividers directly on the collage to resize it.")
+              .font(.caption)
+              .foregroundStyle(.secondary)
+          }
+
+          HStack(spacing: 12) {
+            Button("Apply Once") {
+              onComplete(resolvedName, frames, false)
+              dismiss()
+            }
+            .buttonStyle(.bordered)
+            .frame(maxWidth: .infinity)
+
+            Button(updatesExistingLayout ? "Update & Apply" : "Save & Apply") {
+              onComplete(resolvedName, frames, true)
+              dismiss()
+            }
+            .buttonStyle(.borderedProminent)
+            .frame(maxWidth: .infinity)
+          }
+          .disabled(!isComplete)
+        }
+        .padding(.horizontal)
+        .padding(.bottom)
+      }
+      .navigationTitle("Custom Cuts")
+      .navigationBarTitleDisplayMode(.inline)
+      .toolbar {
+        ToolbarItem(placement: .cancellationAction) {
+          Button("Cancel") { dismiss() }
+        }
+      }
+    }
+  }
+
+  private var resolvedName: String {
+    let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+    return trimmed.isEmpty ? "Custom Layout" : trimmed
+  }
+
+  private var isComplete: Bool {
+    frames.count == photoCount
+      && !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+  }
+
+  private func fittedCanvasSize(in available: CGSize) -> CGSize {
+    let ratio = canvas.aspectRatio
+    let maximum = CGSize(width: max(1, available.width), height: max(1, available.height))
+    if maximum.width / maximum.height > ratio {
+      return CGSize(width: maximum.height * ratio, height: maximum.height)
+    }
+    return CGSize(width: maximum.width, height: maximum.width / ratio)
+  }
+
+  private func splitSelected(axis: LayoutAxis) {
+    guard frames.count < photoCount, frames.indices.contains(selectedIndex) else { return }
+    history.append(frames)
+    let frame = frames[selectedIndex]
+    let first: NormalizedLayoutFrame
+    let second: NormalizedLayoutFrame
+    switch axis {
+    case .horizontal:
+      first = NormalizedLayoutFrame(
+        x: frame.x, y: frame.y, width: frame.width, height: frame.height / 2)
+      second = NormalizedLayoutFrame(
+        x: frame.x, y: frame.y + frame.height / 2,
+        width: frame.width, height: frame.height / 2)
+    case .vertical:
+      first = NormalizedLayoutFrame(
+        x: frame.x, y: frame.y, width: frame.width / 2, height: frame.height)
+      second = NormalizedLayoutFrame(
+        x: frame.x + frame.width / 2, y: frame.y,
+        width: frame.width / 2, height: frame.height)
+    }
+    frames.replaceSubrange(selectedIndex...selectedIndex, with: [first, second])
+  }
+
+  private func undo() {
+    guard let previous = history.popLast() else { return }
+    frames = previous
+    selectedIndex = min(selectedIndex, max(0, frames.count - 1))
+  }
+
+  private func reset() {
+    if frames.count != 1 { history.append(frames) }
+    frames = [NormalizedLayoutFrame(x: 0, y: 0, width: 1, height: 1)]
+    selectedIndex = 0
+  }
+}
+
 private struct PhotoRow: View {
   let photo: CollagePhoto
   let image: UIImage?
@@ -1300,6 +1874,33 @@ private struct EditorMessage: Identifiable {
   let id = UUID()
   let title: String
   let detail: String
+}
+
+private struct CustomLayoutBuilderRequest: Identifiable {
+  let id = UUID()
+  let layout: SavedCustomLayout?
+}
+
+private enum PendingExportAction {
+  case openControls
+  case preview
+}
+
+private struct CustomLayoutNameRequest: Identifiable {
+  enum Action {
+    case saveCurrent
+    case rename(UUID)
+  }
+
+  let id = UUID()
+  let action: Action
+
+  var title: String {
+    switch action {
+    case .saveCurrent: "Save Custom Layout"
+    case .rename: "Rename Custom Layout"
+    }
+  }
 }
 
 private enum EditorTool: String, CaseIterable, Identifiable {

@@ -10,6 +10,7 @@ MixaFrame is an iOS photo collage app that lets users combine multiple photos in
 - Reduce manual cropping by keeping the main subject or subjects visible in every frame.
 - Allow users to return to, update, and recreate previous collages.
 - Help users organize related collages into projects.
+- Keep collage creation available without payment while offering watermark-free exports through an optional subscription.
 
 ## 3. Core Concepts
 
@@ -64,8 +65,11 @@ The collage output is a single image generated from a collage task. Updating a t
 - The app provides a curated, photo-count-specific layout catalog across photo counts 1 through 12.
 - The layout browser is organized into Grid, Featured, Mosaic, and Slanted groups. Featured combines Hero and Editorial compositions into one group and omits duplicate two-band Editorial layouts that match Hero edge structures. Strip, creative card-stack, and circular-mask layouts are excluded.
 - Grid templates use intentional row compositions for each supported photo count. Every row expands its frames across the full canvas width without empty placeholder cells. Examples include 3–2–3 and 2–3–3 for eight photos, and 4–4–3 and 4–3–4 for eleven photos. Generic one-column and incomplete-grid-fill templates are not offered. Grid row heights and individual cell widths adapt to the selected photos' aspect ratios to retain as much source-photo area as possible while still filling the canvas.
-- Available templates include full-width row grids, featured-photo layouts on every edge, weighted editorial bands, recursive Mondrian mosaics, masonry columns, brick layouts, and multi-row, multi-column slanted mosaics.
-- Every Featured template lets the user choose one, two, or three main photos plus the remaining photos in smaller secondary regions whenever the selected photo count leaves at least one secondary photo. Changing this value updates every Featured sample while preserving each template's edge, orientation, and visual style. Main-photo frames remain visibly larger on average than secondary frames, and automatic best-fit placement assigns suitable photos to both regions.
+- Available templates include full-width row grids; featured-photo layouts on every edge; Corner Anchor, Dual Anchor, and Center Window Featured compositions; weighted editorial bands; recursive Mondrian mosaics; masonry columns; brick layouts; Aspect-Aware Slice, Pinwheel, Golden Spiral, and T-Junction Quilt mosaics; and multi-row, multi-column slanted mosaics.
+- Featured directly presents every distinct composition with one, two, or three main photos plus the remaining photos in smaller secondary regions whenever the selected photo count leaves at least one secondary photo. There is no separate main-photo-count control; each layout thumbnail and title communicates its emphasis count. Visually identical frame geometry is shown only once even when multiple internal templates could produce it. Main-photo frames remain visibly larger on average than secondary frames, and automatic best-fit placement assigns suitable photos to both regions.
+- The Layout tool provides Custom Cuts outside the built-in family filters. The user builds an exact-fill rectangular layout by repeatedly selecting a region and splitting it side-by-side or top-to-bottom until there is exactly one region for every selected photo. Custom Cuts must never overlap or leave unused canvas space.
+- The user can apply a Custom Cuts layout once or save it to My Layouts for later reuse. A saved custom layout has a user-editable name and fixed compatible photo count, and the user can apply, rename, update, duplicate, or delete it without changing collages that already use its geometry.
+- Custom layout geometry, including later divider adjustments, is persisted with the collage task. The reusable My Layouts library is also persisted locally and remains available after the app relaunches.
 - The Slanted family provides nine gentle, bold, rising, falling, zigzag, rhythmic, and featured-row mosaic variants for every selection from 2 through 12 photos; a clean poster-matte option represents the family for one photo. Slanted layouts distribute photos across multiple rows and columns with angled horizontal and vertical boundaries instead of presenting all photos in one row or one column whenever the photo count allows both dimensions.
 - Each photo count presents only compatible templates that contain exactly one frame for every selected photo.
 - Rotations, mirrors, proportions, and other variants count as separate templates only when they produce a meaningfully different composition; photo-order permutations do not count as separate layouts.
@@ -80,7 +84,7 @@ The collage output is a single image generated from a collage task. Updating a t
 - In Layout settings, the user can adjust the outer collage canvas corners from square (0%) through fully rounded (50%). This setting does not round individual photo frames.
 - Rounded canvas corners are transparent in PNG and WebP exports. JPEG exports flatten the area outside the rounded canvas onto white because JPEG does not support transparency.
 - The layout browser shows live miniature previews and compact family filters without displacing the primary collage preview.
-- The layout browser scores templates for the current photos, ranks stronger crop-retention options first, and hides templates that crop materially more image area than the best options. A layout normally qualifies only when it retains at least 68% of source-photo area on average and at least 42% for every individual photo; when a canvas/photo combination makes those levels geometrically impossible, only layouts within 10 percentage points of the best achievable fit are offered.
+- The layout browser scores templates for the current photos and ranks stronger crop-retention options first. Featured always shows every distinct one-, two-, and three-main composition so the user can choose emphasis directly; other families hide templates that crop materially more image area than the best options. A filtered layout normally qualifies only when it retains at least 68% of source-photo area on average and at least 42% for every individual photo; when a canvas/photo combination makes those levels geometrically impossible, only layouts within 10 percentage points of the best achievable fit are offered.
 - When photos are added or removed, the app preserves the corresponding layout variant for the new photo count when one exists and otherwise selects a compatible fallback.
 - When a layout or image dimension changes, the app recalculates subject-aware crops while retaining manual crop adjustments where they remain valid.
 - Regenerating an unchanged task should produce a visually equivalent collage.
@@ -109,6 +113,7 @@ The collage output is a single image generated from a collage task. Updating a t
   - Photo ordering.
   - Layout and output dimensions.
   - A stable catalog layout identifier, with migration support for tasks saved using legacy layout values.
+  - A self-contained snapshot of the resolved layout geometry, including normalized frame rectangles, clip polygons, rotation, corner treatment, aspect-fit behavior, photo-to-frame assignment, and output aspect ratio. Reopening, rendering, or exporting a saved collage must use this snapshot and must not change if its original catalog template is later modified, renamed, or removed.
   - Selected output resolution.
   - Selected output image format and format-specific settings.
   - Selected output-quality preset.
@@ -153,6 +158,18 @@ The collage output is a single image generated from a collage task. Updating a t
 - The user can share or export the generated collage using the standard iOS share sheet.
 - Export first opens a full-screen review of the rendered image where the user can pinch or use controls to zoom, drag to inspect different areas, and reset the view before choosing Save to Photos or Share.
 - Leaving the export review without saving or sharing discards its temporary file and does not replace the task's previous export.
+
+### 4.7 Subscription and Free Use
+
+- The app remains fully usable for creating, editing, saving, and reopening collage tasks without starting a trial or purchasing a subscription.
+- Free users can preview, save, and share exported collages, but every exported image includes a compact bottom-right MixaFrame brand badge using a polished display font that remains readable at every supported resolution and creates a clear incentive to upgrade for a clean export.
+- The app offers one auto-renewable annual MixaFrame Premium subscription that removes the watermark from saved and shared collage exports.
+- Eligible new subscribers receive a seven-day free trial before the annual subscription charge begins.
+- Trial and paid-subscription entitlements both produce watermark-free exports.
+- The paywall displays localized App Store pricing, trial eligibility, annual renewal terms, a Restore Purchases action, a Continue Free action, privacy information, and terms of use.
+- The app listens for StoreKit transaction updates and refreshes subscription status after purchases, restorations, renewals, expirations, revocations, and upgrades.
+- Purchases must be verified by StoreKit before watermark-free access is granted.
+- Task thumbnails and the interactive editor preview do not include the subscription watermark; the watermark is applied only to generated export files and their export review previews.
 
 ## 5. User Experience Requirements
 
@@ -229,6 +246,10 @@ The MVP is complete when a user can:
 21. Render and export rectangular and multi-row, multi-column slanted-mosaic layouts consistently with their on-screen previews.
 22. Choose a white or dark collage background and preserve that choice when the task is saved and reopened.
 23. Review the rendered export full-screen, zoom and pan to inspect it, and then choose Save to Photos, Share, or Back without saving.
+24. Continue using every collage-editing feature without starting a trial or subscription and receive a clearly watermarked export.
+25. Start an eligible seven-day trial or annual subscription, restore an existing purchase, and export without a watermark while the entitlement is active.
+26. Create an exact-fill Custom Cuts layout for the selected photo count and resize all of its dividers in the collage editor.
+27. Save a Custom Cuts layout to My Layouts, reopen the app, reuse it in another compatible collage, and rename, update, duplicate, or delete the saved layout.
 
 ## 9. Assumptions
 

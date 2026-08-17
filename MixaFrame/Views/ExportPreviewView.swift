@@ -47,6 +47,12 @@ struct ExportPreviewView: View {
           )
           .font(.caption)
           .foregroundStyle(.secondary)
+          if export.includesWatermark {
+            Label("Free export · MixaFrame watermark included", systemImage: "info.circle")
+              .font(.caption)
+              .foregroundStyle(.secondary)
+              .frame(maxWidth: .infinity, alignment: .leading)
+          }
           Button {
             saveToPhotos()
           } label: {

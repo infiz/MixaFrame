@@ -7,6 +7,7 @@ enum LayoutFamily: String, CaseIterable, Identifiable {
   case editorial
   case mosaic
   case slanted
+  case custom
 
   var id: String { rawValue }
 
@@ -27,8 +28,19 @@ enum LayoutFamily: String, CaseIterable, Identifiable {
     case .editorial: "newspaper"
     case .mosaic: "square.grid.3x3.topleft.filled"
     case .slanted: "square.split.diagonal.2x2"
+    case .custom: "rectangle.split.2x2"
     }
   }
+}
+
+enum PartitionLayoutStyle: String, Hashable {
+  case aspectAware
+  case cornerAnchor
+  case dualAnchor
+  case pinwheel
+  case centerWindow
+  case goldenSpiral
+  case tJunction
 }
 
 enum LayoutAxis: Hashable {
@@ -63,6 +75,8 @@ enum LayoutRecipe: Hashable {
   case slantedMosaic(
     rowCounts: [Int], rowWeights: [CGFloat], horizontalSlope: CGFloat,
     verticalSlope: CGFloat, alternating: Bool)
+  case partition(style: PartitionLayoutStyle, mainCount: Int?)
+  case custom
   case cards(rotation: CGFloat, spread: CGFloat)
   case bubbles(columns: Int)
   case inset(scale: CGFloat, rotation: CGFloat, cornerRadius: CGFloat)
@@ -120,13 +134,20 @@ enum LayoutCatalog {
   static func template(id: String?, photoCount: Int) -> CollageLayoutTemplate? {
     guard let id else { return nil }
     let count = max(1, min(photoCount, 12))
+    if id == customTemplate(photoCount: count).id { return customTemplate(photoCount: count) }
     return templatesByPhotoCountAndID[count - 1][id]
+  }
+
+  static func customTemplate(photoCount rawCount: Int) -> CollageLayoutTemplate {
+    let count = max(1, min(rawCount, 12))
+    return template(count, "custom-cuts", "Custom Cuts", .custom, .custom)
   }
 
   static func compatibleTemplate(id: String?, photoCount: Int) -> CollageLayoutTemplate? {
     guard let id, let separator = id.firstIndex(of: "-") else { return nil }
-    let key = id[id.index(after: separator)...]
-    let layouts = templates(photoCount: photoCount)
+    let key = String(id[id.index(after: separator)...])
+    let count = max(1, min(photoCount, 12))
+    let layouts = templates(photoCount: count)
     if let exact = layouts.first(where: { candidate in
       guard let candidateSeparator = candidate.id.firstIndex(of: "-") else { return false }
       return candidate.id[candidate.id.index(after: candidateSeparator)...] == key
@@ -135,7 +156,35 @@ enum LayoutCatalog {
     }
 
     let replacementKey: String?
-    if key.hasPrefix("hero-top-") {
+    let directReplacements = [
+      "poster-matte": "gallery-matte",
+      "brick-bold": "brick-soft",
+      "mondrian-2": "mondrian-6",
+      "mondrian-3": "mondrian-1",
+      "mondrian-4": "mondrian-0",
+      "mondrian-7": "mondrian-5",
+    ]
+    if let directReplacement = directReplacements[key] {
+      replacementKey = directReplacement
+    } else if count <= 3 && key == "slanted-bold-rise" {
+      replacementKey = "slanted-gentle-rise"
+    } else if count <= 3 && (key == "slanted-center" || key == "slanted-rhythm") {
+      replacementKey = "slanted-zigzag"
+    } else if count == 2 && (key == "slanted-lead" || key == "slanted-finale") {
+      replacementKey = "slanted-gentle-fall"
+    } else if count == 3 && key == "featured-corner-anchor-main-2" {
+      replacementKey = "hero-left-main-2"
+    } else if count == 4 && key == "featured-corner-anchor-main-3" {
+      replacementKey = "hero-left-main-3"
+    } else if count == 4 && key == "featured-dual-anchor-main-3" {
+      replacementKey = "hero-top-main-3"
+    } else if count <= 6 && key.hasPrefix("featured-center-window-main-") {
+      let mainCount = key.last.flatMap { Int(String($0)) } ?? 1
+      replacementKey =
+        mainCount == 1
+        ? "editorial-three-row-center"
+        : "editorial-three-row-center-main-\(mainCount)"
+    } else if key.hasPrefix("hero-top-") {
       replacementKey = "hero-top-58"
     } else if key.hasPrefix("hero-bottom-") {
       replacementKey = "hero-bottom-58"
@@ -167,7 +216,7 @@ enum LayoutCatalog {
       replacementKey = nil
     }
     guard let replacementKey else { return nil }
-    return layouts.first { $0.id == "n\(max(1, min(photoCount, 12)))-\(replacementKey)" }
+    return layouts.first { $0.id == "n\(count)-\(replacementKey)" }
   }
 
   static func selectedTemplate(for task: CollageTask) -> CollageLayoutTemplate {
@@ -196,9 +245,6 @@ enum LayoutCatalog {
       template(
         1, "gallery-matte", "Gallery Matte", .grid,
         .inset(scale: 0.84, rotation: 0, cornerRadius: 0)),
-      template(
-        1, "poster-matte", "Poster Matte", .slanted,
-        .inset(scale: 0.76, rotation: 0, cornerRadius: 0)),
     ]
   }
 
@@ -241,7 +287,7 @@ enum LayoutCatalog {
       let edges: [(LayoutEdge, String)] = [
         (.top, "Top"), (.bottom, "Bottom"), (.left, "Left"), (.right, "Right"),
       ]
-      return edges.flatMap { edge, edgeName in
+      var layouts = edges.flatMap { edge, edgeName in
         (1...min(3, count - 1)).map { mainCount in
           if mainCount == 1 {
             return template(
@@ -256,6 +302,29 @@ enum LayoutCatalog {
               fraction: heroMainFraction(photoCount: count, mainCount: mainCount)))
         }
       }
+      let maximumMainCount = min(3, count - 1)
+      let featuredStyles: [(PartitionLayoutStyle, String, String, Int)] = [
+        (.cornerAnchor, "corner-anchor", "Corner Anchor", 3),
+        (.dualAnchor, "dual-anchor", "Dual Anchor", 4),
+        (.centerWindow, "center-window", "Center Window", 5),
+      ]
+      for (style, key, title, minimumPhotoCount) in featuredStyles
+      where count >= minimumPhotoCount {
+        layouts += (1...maximumMainCount).compactMap { mainCount in
+          guard
+            isDistinctFeaturedLayout(
+              style: style,
+              photoCount: count,
+              mainCount: mainCount
+            )
+          else { return nil }
+          return template(
+            count, "featured-\(key)-main-\(mainCount)",
+            "\(mainCount) Main · \(title)", .hero,
+            .partition(style: style, mainCount: mainCount))
+        }
+      }
+      return layouts
 
     case .editorial:
       var layouts: [CollageLayoutTemplate] = []
@@ -302,8 +371,11 @@ enum LayoutCatalog {
       return layouts
 
     case .mosaic:
-      var layouts = (0..<8).map { seed in
-        template(count, "mondrian-\(seed)", "Mondrian \(seed + 1)", .mosaic, .mosaic(seed: seed))
+      let mondrianSeeds = [0, 1, 5, 6]
+      var layouts = mondrianSeeds.enumerated().map { displayIndex, seed in
+        template(
+          count, "mondrian-\(seed)", "Mondrian \(displayIndex + 1)", .mosaic,
+          .mosaic(seed: seed))
       }
       for columns in 2...min(4, count) {
         for seed in 0..<2 {
@@ -317,10 +389,30 @@ enum LayoutCatalog {
         template(
           count, "brick-soft", "Soft Brick", .mosaic,
           .brick(rows: max(2, Int(round(sqrt(Double(count))))), offset: 0.08)))
-      layouts.append(
-        template(
-          count, "brick-bold", "Bold Brick", .mosaic,
-          .brick(rows: max(2, Int(round(sqrt(Double(count))))), offset: 0.18)))
+      if count >= 3 {
+        layouts.append(
+          template(
+            count, "aspect-aware-slice", "Aspect-Aware Slice", .mosaic,
+            .partition(style: .aspectAware, mainCount: nil)))
+      }
+      if count >= 4 {
+        layouts.append(
+          template(
+            count, "t-junction-quilt", "T-Junction Quilt", .mosaic,
+            .partition(style: .tJunction, mainCount: nil)))
+      }
+      if count >= 5 {
+        layouts.append(
+          template(
+            count, "pinwheel", "Pinwheel", .mosaic,
+            .partition(style: .pinwheel, mainCount: nil)))
+      }
+      if (4...10).contains(count) {
+        layouts.append(
+          template(
+            count, "golden-spiral", "Golden Spiral", .mosaic,
+            .partition(style: .goldenSpiral, mainCount: nil)))
+      }
       return layouts
 
     case .slanted:
@@ -337,7 +429,7 @@ enum LayoutCatalog {
       let rhythmWeights = (0..<centeredRows.count).map {
         $0.isMultiple(of: 2) ? CGFloat(1.2) : 0.85
       }
-      return [
+      let layouts = [
         template(
           count, "slanted-gentle-fall", "Gentle Cascade", .slanted,
           .slantedMosaic(
@@ -384,6 +476,25 @@ enum LayoutCatalog {
             rowCounts: trailingRows, rowWeights: rhythmWeights, horizontalSlope: -0.07,
             verticalSlope: 0.075, alternating: true)),
       ]
+      let retainedKeys: Set<String>
+      switch count {
+      case 2:
+        retainedKeys = [
+          "slanted-gentle-fall", "slanted-gentle-rise", "slanted-bold-fall",
+          "slanted-zigzag",
+        ]
+      case 3:
+        retainedKeys = [
+          "slanted-gentle-fall", "slanted-gentle-rise", "slanted-bold-fall",
+          "slanted-zigzag", "slanted-lead", "slanted-finale",
+        ]
+      default:
+        return layouts
+      }
+      return layouts.filter { retainedKeys.contains(layoutKey(for: $0.id)) }
+
+    case .custom:
+      return []
     }
   }
 
@@ -391,6 +502,26 @@ enum LayoutCatalog {
     case leading
     case center
     case trailing
+  }
+
+  private static func isDistinctFeaturedLayout(
+    style: PartitionLayoutStyle,
+    photoCount: Int,
+    mainCount: Int
+  ) -> Bool {
+    switch style {
+    case .cornerAnchor, .dualAnchor:
+      return photoCount - mainCount > 1
+    case .centerWindow:
+      return photoCount >= 7
+    default:
+      return true
+    }
+  }
+
+  private static func layoutKey(for id: String) -> String {
+    guard let separator = id.firstIndex(of: "-") else { return id }
+    return String(id[id.index(after: separator)...])
   }
 
   private static func gridRowPatterns(photoCount: Int) -> [[Int]] {

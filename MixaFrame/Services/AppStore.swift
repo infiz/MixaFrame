@@ -4,6 +4,7 @@ import UIKit
 @MainActor
 final class AppStore: ObservableObject {
   @Published private(set) var projects: [CollageProject] = []
+  @Published private(set) var savedCustomLayouts: [SavedCustomLayout] = []
   @Published var alertMessage: String?
   @Published private(set) var imageCacheRevision = 0
   @Published private(set) var imageCacheReloadGeneration = 0
@@ -27,7 +28,9 @@ final class AppStore: ObservableObject {
     previewCache.totalCostLimit = 96 * 1024 * 1024
     thumbnailCache.totalCostLimit = 12 * 1024 * 1024
     collageThumbnailCache.totalCostLimit = 16 * 1024 * 1024
-    if load() { pruneUnreferencedGeneratedFiles() }
+    let loadedProjects = load()
+    loadCustomLayouts()
+    if loadedProjects { pruneUnreferencedGeneratedFiles() }
     memoryWarningObserver = NotificationCenter.default.addObserver(
       forName: UIApplication.didReceiveMemoryWarningNotification,
       object: nil,
@@ -81,6 +84,60 @@ final class AppStore: ObservableObject {
     return project.id
   }
 
+  @discardableResult
+  func createCustomLayout(
+    name: String,
+    photoCount: Int,
+    frames: [NormalizedLayoutFrame]
+  ) -> UUID? {
+    let resolvedCount = max(1, min(photoCount, 12))
+    guard frames.count == resolvedCount, frames.allSatisfy(\.isValid) else { return nil }
+    let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+    let layout = SavedCustomLayout(
+      name: trimmed.isEmpty ? "Custom Layout" : trimmed,
+      photoCount: resolvedCount,
+      frames: frames
+    )
+    savedCustomLayouts.insert(layout, at: 0)
+    persistCustomLayouts()
+    return layout.id
+  }
+
+  func updateCustomLayout(
+    id: UUID,
+    name: String? = nil,
+    frames: [NormalizedLayoutFrame]? = nil
+  ) {
+    guard let index = savedCustomLayouts.firstIndex(where: { $0.id == id }) else { return }
+    if let name {
+      let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+      if !trimmed.isEmpty { savedCustomLayouts[index].name = trimmed }
+    }
+    if let frames,
+      frames.count == savedCustomLayouts[index].photoCount,
+      frames.allSatisfy(\.isValid)
+    {
+      savedCustomLayouts[index].frames = frames
+    }
+    savedCustomLayouts[index].modifiedAt = Date()
+    persistCustomLayouts()
+  }
+
+  @discardableResult
+  func duplicateCustomLayout(id: UUID) -> UUID? {
+    guard let source = savedCustomLayouts.first(where: { $0.id == id }) else { return nil }
+    return createCustomLayout(
+      name: "\(source.name) Copy",
+      photoCount: source.photoCount,
+      frames: source.frames
+    )
+  }
+
+  func deleteCustomLayout(id: UUID) {
+    savedCustomLayouts.removeAll { $0.id == id }
+    persistCustomLayouts()
+  }
+
   func renameProject(id: UUID, name: String) {
     guard let index = projects.firstIndex(where: { $0.id == id }) else { return }
     let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -116,9 +173,13 @@ final class AppStore: ObservableObject {
     persist()
   }
 
-  func saveTask(_ task: CollageTask) {
-    guard let projectIndex = projects.firstIndex(where: { $0.id == task.projectID }) else { return }
+  @discardableResult
+  func saveTask(_ task: CollageTask) -> CollageTask {
+    guard let projectIndex = projects.firstIndex(where: { $0.id == task.projectID }) else {
+      return task
+    }
     var updated = task
+    updated.savedLayoutSnapshot = LayoutEngine.savedLayoutSnapshot(for: updated)
     updated.modifiedAt = Date()
     var removedPhotos: [CollagePhoto] = []
     var replacedExportFileName: String?
@@ -142,6 +203,7 @@ final class AppStore: ObservableObject {
     if let replacedExportFileName { removeExportIfUnreferenced(fileName: replacedExportFileName) }
     persistCollageThumbnail(for: updated)
     persist()
+    return updated
   }
 
   func discardUnsavedPhotoFiles(from task: CollageTask) {
@@ -169,33 +231,21 @@ final class AppStore: ObservableObject {
   }
 
   func previewImage(for photo: CollagePhoto) -> UIImage? {
-    let key = cacheKey(for: photo)
-    if let preview = previewCache.object(forKey: key) { return preview }
-    if let preview = UIImage(contentsOfFile: previewURL(for: photo).path) {
-      previewCache.setObject(preview, forKey: key, cost: memoryCost(of: preview))
-      return preview
-    }
-    if let thumbnail = thumbnailCache.object(forKey: key) { return thumbnail }
-    if let thumbnail = UIImage(contentsOfFile: thumbnailURL(for: photo).path) {
-      thumbnailCache.setObject(thumbnail, forKey: key, cost: memoryCost(of: thumbnail))
-      return thumbnail
-    }
-    return nil
+    cachedOrPersistedPreview(for: photo).image
+      ?? cachedOrPersistedThumbnail(for: photo).image
   }
 
   func thumbnailImage(for photo: CollagePhoto) -> UIImage? {
-    let key = cacheKey(for: photo)
-    if let thumbnail = thumbnailCache.object(forKey: key) { return thumbnail }
-    if let thumbnail = UIImage(contentsOfFile: thumbnailURL(for: photo).path) {
-      thumbnailCache.setObject(thumbnail, forKey: key, cost: memoryCost(of: thumbnail))
-      return thumbnail
+    cachedOrPersistedThumbnail(for: photo).image
+      ?? cachedOrPersistedPreview(for: photo).image
+  }
+
+  func preloadPersistedThumbnails(for photos: [CollagePhoto]) {
+    var loadedFromDisk = false
+    for photo in photos {
+      loadedFromDisk = cachedOrPersistedThumbnail(for: photo).loadedFromDisk || loadedFromDisk
     }
-    if let preview = previewCache.object(forKey: key) { return preview }
-    if let preview = UIImage(contentsOfFile: previewURL(for: photo).path) {
-      previewCache.setObject(preview, forKey: key, cost: memoryCost(of: preview))
-      return preview
-    }
-    return nil
+    if loadedFromDisk { imageCacheRevision &+= 1 }
   }
 
   func collageThumbnailImage(for task: CollageTask) -> UIImage? {
@@ -247,10 +297,14 @@ final class AppStore: ObservableObject {
   }
 
   func prepareDerivedImages(for photos: [CollagePhoto]) async {
-    let pending = photos.filter {
-      previewCache.object(forKey: cacheKey(for: $0)) == nil
-        || thumbnailCache.object(forKey: cacheKey(for: $0)) == nil
+    var loadedFromDisk = false
+    let pending = photos.filter { photo in
+      let preview = cachedOrPersistedPreview(for: photo)
+      let thumbnail = cachedOrPersistedThumbnail(for: photo)
+      loadedFromDisk = loadedFromDisk || preview.loadedFromDisk || thumbnail.loadedFromDisk
+      return preview.image == nil || thumbnail.image == nil
     }
+    if loadedFromDisk { imageCacheRevision &+= 1 }
     guard !pending.isEmpty else { return }
 
     for batchStart in stride(from: 0, to: pending.count, by: 2) {
@@ -285,6 +339,10 @@ final class AppStore: ObservableObject {
     rootDirectory.appendingPathComponent("projects.json")
   }
 
+  private var customLayoutsURL: URL {
+    rootDirectory.appendingPathComponent("custom-layouts.json")
+  }
+
   private func ensureDirectories() throws {
     try fileManager.createDirectory(at: photoDirectory, withIntermediateDirectories: true)
     try fileManager.createDirectory(at: exportDirectory, withIntermediateDirectories: true)
@@ -309,6 +367,21 @@ final class AppStore: ObservableObject {
     }
   }
 
+  private func loadCustomLayouts() {
+    guard fileManager.fileExists(atPath: customLayoutsURL.path) else { return }
+    do {
+      let data = try Data(contentsOf: customLayoutsURL)
+      savedCustomLayouts = try decoder.decode([SavedCustomLayout].self, from: data)
+        .filter { layout in
+          (1...12).contains(layout.photoCount)
+            && layout.frames.count == layout.photoCount
+            && layout.frames.allSatisfy(\.isValid)
+        }
+    } catch {
+      alertMessage = "Saved custom layouts could not be loaded: \(error.localizedDescription)"
+    }
+  }
+
   private func pruneUnreferencedGeneratedFiles() {
     let tasks = projects.flatMap(\.tasks)
     let referencedOriginals = Set(tasks.flatMap(\.photos).map(\.fileName))
@@ -324,15 +397,28 @@ final class AppStore: ObservableObject {
   }
 
   private func pruneFiles(in directory: URL, keeping fileNames: Set<String>) {
-    guard
-      let files = try? fileManager.contentsOfDirectory(
-        at: directory,
-        includingPropertiesForKeys: nil,
-        options: [.skipsHiddenFiles]
-      )
-    else { return }
-    for file in files where !fileNames.contains(file.lastPathComponent) {
-      try? fileManager.removeItem(at: file)
+    guard let enumerator = fileManager.enumerator(
+      at: directory,
+      includingPropertiesForKeys: [.isDirectoryKey],
+      options: [.skipsHiddenFiles]
+    ) else { return }
+
+    var directories: [URL] = []
+    for case let file as URL in enumerator {
+      let values = try? file.resourceValues(forKeys: [.isDirectoryKey])
+      if values?.isDirectory == true {
+        directories.append(file)
+        continue
+      }
+      let relativePath = String(file.path.dropFirst(directory.path.count + 1))
+      if !fileNames.contains(relativePath) {
+        try? fileManager.removeItem(at: file)
+      }
+    }
+
+    for folder in directories.sorted(by: { $0.path.count > $1.path.count }) {
+      let contents = try? fileManager.contentsOfDirectory(atPath: folder.path)
+      if contents?.isEmpty == true { try? fileManager.removeItem(at: folder) }
     }
   }
 
@@ -342,6 +428,15 @@ final class AppStore: ObservableObject {
       try encoder.encode(projects).write(to: databaseURL, options: .atomic)
     } catch {
       alertMessage = "Changes could not be saved: \(error.localizedDescription)"
+    }
+  }
+
+  private func persistCustomLayouts() {
+    do {
+      try ensureDirectories()
+      try encoder.encode(savedCustomLayouts).write(to: customLayoutsURL, options: .atomic)
+    } catch {
+      alertMessage = "Custom layouts could not be saved: \(error.localizedDescription)"
     }
   }
 
@@ -358,6 +453,30 @@ final class AppStore: ObservableObject {
     thumbnailCache.setObject(
       images.thumbnail, forKey: key, cost: memoryCost(of: images.thumbnail))
     imageCacheRevision &+= 1
+  }
+
+  private func cachedOrPersistedPreview(
+    for photo: CollagePhoto
+  ) -> (image: UIImage?, loadedFromDisk: Bool) {
+    let key = cacheKey(for: photo)
+    if let image = previewCache.object(forKey: key) { return (image, false) }
+    guard let image = UIImage(contentsOfFile: previewURL(for: photo).path) else {
+      return (nil, false)
+    }
+    previewCache.setObject(image, forKey: key, cost: memoryCost(of: image))
+    return (image, true)
+  }
+
+  private func cachedOrPersistedThumbnail(
+    for photo: CollagePhoto
+  ) -> (image: UIImage?, loadedFromDisk: Bool) {
+    let key = cacheKey(for: photo)
+    if let image = thumbnailCache.object(forKey: key) { return (image, false) }
+    guard let image = UIImage(contentsOfFile: thumbnailURL(for: photo).path) else {
+      return (nil, false)
+    }
+    thumbnailCache.setObject(image, forKey: key, cost: memoryCost(of: image))
+    return (image, true)
   }
 
   private func cacheKey(for photo: CollagePhoto) -> NSString {
