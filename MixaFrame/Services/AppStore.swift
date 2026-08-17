@@ -1,4 +1,6 @@
 import Foundation
+import ImageIO
+import Photos
 import UIKit
 
 @MainActor
@@ -28,9 +30,8 @@ final class AppStore: ObservableObject {
     previewCache.totalCostLimit = 96 * 1024 * 1024
     thumbnailCache.totalCostLimit = 12 * 1024 * 1024
     collageThumbnailCache.totalCostLimit = 16 * 1024 * 1024
-    let loadedProjects = load()
+    _ = load()
     loadCustomLayouts()
-    if loadedProjects { pruneUnreferencedGeneratedFiles() }
     memoryWarningObserver = NotificationCenter.default.addObserver(
       forName: UIApplication.didReceiveMemoryWarningNotification,
       object: nil,
@@ -148,36 +149,50 @@ final class AppStore: ObservableObject {
   }
 
   func deleteProjects(at offsets: IndexSet) {
+    let previousProjects = projects
     var removedTasks: [CollageTask] = []
     for index in offsets.sorted(by: >) {
       removedTasks.append(contentsOf: projects.remove(at: index).tasks)
     }
+    guard persist() else {
+      projects = previousProjects
+      return
+    }
     removedTasks.forEach(cleanUpUnreferencedAssets)
-    persist()
   }
 
   func deleteProject(id: UUID) {
     guard let index = projects.firstIndex(where: { $0.id == id }) else { return }
+    let previousProjects = projects
     let project = projects.remove(at: index)
+    guard persist() else {
+      projects = previousProjects
+      return
+    }
     project.tasks.forEach(cleanUpUnreferencedAssets)
-    persist()
   }
 
   func deleteTask(projectID: UUID, taskID: UUID) {
     guard let projectIndex = projects.firstIndex(where: { $0.id == projectID }),
       let taskIndex = projects[projectIndex].tasks.firstIndex(where: { $0.id == taskID })
     else { return }
+    let previousProjects = projects
     let task = projects[projectIndex].tasks.remove(at: taskIndex)
-    cleanUpUnreferencedAssets(for: task)
     projects[projectIndex].modifiedAt = Date()
-    persist()
+    guard persist() else {
+      projects = previousProjects
+      return
+    }
+    cleanUpUnreferencedAssets(for: task)
   }
 
   @discardableResult
-  func saveTask(_ task: CollageTask) -> CollageTask {
+  func saveTask(_ task: CollageTask) -> CollageTask? {
     guard let projectIndex = projects.firstIndex(where: { $0.id == task.projectID }) else {
-      return task
+      alertMessage = "The project for this collage could not be found."
+      return nil
     }
+    let previousProjects = projects
     var updated = task
     updated.savedLayoutSnapshot = LayoutEngine.savedLayoutSnapshot(for: updated)
     updated.modifiedAt = Date()
@@ -199,10 +214,13 @@ final class AppStore: ObservableObject {
       projects[projectIndex].tasks.insert(updated, at: 0)
     }
     projects[projectIndex].modifiedAt = Date()
+    guard persist() else {
+      projects = previousProjects
+      return nil
+    }
     removedPhotos.forEach(cleanUpUnreferencedPhotoAssets)
     if let replacedExportFileName { removeExportIfUnreferenced(fileName: replacedExportFileName) }
     persistCollageThumbnail(for: updated)
-    persist()
     return updated
   }
 
@@ -276,7 +294,10 @@ final class AppStore: ObservableObject {
     return destination
   }
 
-  func importPhotoData(_ data: Data) async throws -> CollagePhoto {
+  func importPhotoData(
+    _ data: Data,
+    photoLibraryAssetIdentifier: String? = nil
+  ) async throws -> CollagePhoto {
     let id = UUID()
     let fileName = "\(id.uuidString).image"
     try ensureDirectories()
@@ -287,6 +308,7 @@ final class AppStore: ObservableObject {
       try PhotoImagePipeline.importPhoto(
         data: data,
         id: id,
+        photoLibraryAssetIdentifier: photoLibraryAssetIdentifier,
         originalURL: originalURL,
         previewURL: previewURL,
         thumbnailURL: thumbnailURL
@@ -294,6 +316,53 @@ final class AppStore: ObservableObject {
     }.value
     cache(asset.images, for: asset.photo)
     return asset.photo
+  }
+
+  func originalImage(for photo: CollagePhoto) async -> UIImage? {
+    do {
+      try await restoreOriginalIfNeeded(for: photo)
+    } catch {
+      return nil
+    }
+    let path = imageURL(for: photo).path
+    return await Task.detached(priority: .userInitiated) {
+      autoreleasepool {
+        guard let source = UIImage(contentsOfFile: path) else { return nil }
+        return source.preparingForDisplay() ?? source
+      }
+    }.value
+  }
+
+  func restoreOriginalsIfNeeded(for photos: [CollagePhoto]) async throws {
+    for photo in photos {
+      try await restoreOriginalIfNeeded(for: photo)
+    }
+  }
+
+  private func restoreOriginalIfNeeded(for photo: CollagePhoto) async throws {
+    let destination = imageURL(for: photo)
+    if fileManager.fileExists(atPath: destination.path),
+      CGImageSourceCreateWithURL(destination as CFURL, nil) != nil
+    {
+      return
+    }
+    try? fileManager.removeItem(at: destination)
+    guard let assetIdentifier = photo.photoLibraryAssetIdentifier else {
+      throw AppError.imageMissing
+    }
+    try ensureDirectories()
+    do {
+      try await PhotoLibraryOriginalRestorer.copyOriginal(
+        assetIdentifier: assetIdentifier,
+        to: destination
+      )
+      guard CGImageSourceCreateWithURL(destination as CFURL, nil) != nil else {
+        throw AppError.invalidImage
+      }
+    } catch {
+      try? fileManager.removeItem(at: destination)
+      throw error
+    }
   }
 
   func prepareDerivedImages(for photos: [CollagePhoto]) async {
@@ -309,6 +378,9 @@ final class AppStore: ObservableObject {
 
     for batchStart in stride(from: 0, to: pending.count, by: 2) {
       let batch = Array(pending[batchStart..<min(batchStart + 2, pending.count)])
+      for photo in batch {
+        try? await restoreOriginalIfNeeded(for: photo)
+      }
       let requests = batch.map { photo in
         (
           photo: photo,
@@ -382,52 +454,15 @@ final class AppStore: ObservableObject {
     }
   }
 
-  private func pruneUnreferencedGeneratedFiles() {
-    let tasks = projects.flatMap(\.tasks)
-    let referencedOriginals = Set(tasks.flatMap(\.photos).map(\.fileName))
-    let referencedDerived = Set(tasks.flatMap(\.photos).map { "\($0.id.uuidString).jpg" })
-    let referencedCollageThumbnails = Set(tasks.map { "\($0.id.uuidString).png" })
-    let referencedExports = Set(tasks.compactMap(\.latestExportFileName))
-
-    pruneFiles(in: photoDirectory, keeping: referencedOriginals)
-    pruneFiles(in: previewDirectory, keeping: referencedDerived)
-    pruneFiles(in: thumbnailDirectory, keeping: referencedDerived)
-    pruneFiles(in: collageThumbnailDirectory, keeping: referencedCollageThumbnails)
-    pruneFiles(in: exportDirectory, keeping: referencedExports)
-  }
-
-  private func pruneFiles(in directory: URL, keeping fileNames: Set<String>) {
-    guard let enumerator = fileManager.enumerator(
-      at: directory,
-      includingPropertiesForKeys: [.isDirectoryKey],
-      options: [.skipsHiddenFiles]
-    ) else { return }
-
-    var directories: [URL] = []
-    for case let file as URL in enumerator {
-      let values = try? file.resourceValues(forKeys: [.isDirectoryKey])
-      if values?.isDirectory == true {
-        directories.append(file)
-        continue
-      }
-      let relativePath = String(file.path.dropFirst(directory.path.count + 1))
-      if !fileNames.contains(relativePath) {
-        try? fileManager.removeItem(at: file)
-      }
-    }
-
-    for folder in directories.sorted(by: { $0.path.count > $1.path.count }) {
-      let contents = try? fileManager.contentsOfDirectory(atPath: folder.path)
-      if contents?.isEmpty == true { try? fileManager.removeItem(at: folder) }
-    }
-  }
-
-  private func persist() {
+  @discardableResult
+  private func persist() -> Bool {
     do {
       try ensureDirectories()
       try encoder.encode(projects).write(to: databaseURL, options: .atomic)
+      return true
     } catch {
       alertMessage = "Changes could not be saved: \(error.localizedDescription)"
+      return false
     }
   }
 
@@ -527,10 +562,10 @@ final class AppStore: ObservableObject {
       return
     }
     let images = task.photos.map { photo in
-      previewCache.object(forKey: cacheKey(for: photo))
-        ?? thumbnailCache.object(forKey: cacheKey(for: photo))
-        ?? UIImage(contentsOfFile: previewURL(for: photo).path)
+      thumbnailCache.object(forKey: cacheKey(for: photo))
         ?? UIImage(contentsOfFile: thumbnailURL(for: photo).path)
+        ?? previewCache.object(forKey: cacheKey(for: photo))
+        ?? UIImage(contentsOfFile: previewURL(for: photo).path)
     }
     guard images.contains(where: { $0 != nil }) else { return }
     guard
@@ -560,6 +595,9 @@ enum AppError: LocalizedError {
   case invalidImage
   case noPhotos
   case imageMissing
+  case persistenceFailed
+  case photoLibraryAccessRequired
+  case photoLibraryAssetMissing
   case imageTooLarge
   case encodingUnavailable(String)
 
@@ -568,10 +606,61 @@ enum AppError: LocalizedError {
     case .invalidImage: "One of the selected items is not a readable image."
     case .noPhotos: "Select at least two photos before exporting."
     case .imageMissing: "A source photo is missing. Remove or replace it before exporting."
+    case .persistenceFailed: "The collage could not be saved. Try again before closing it."
+    case .photoLibraryAccessRequired:
+      "Allow MixaFrame to read the selected photos in Settings, then try again."
+    case .photoLibraryAssetMissing:
+      "The original photo is no longer available in the Photos library."
     case .imageTooLarge:
       "This photo strip is too large to render safely. Reduce the resolution or remove some photos."
     case .encodingUnavailable(let format):
       "\(format) encoding is not available on this device. Choose another format."
+    }
+  }
+}
+
+private enum PhotoLibraryOriginalRestorer {
+  static func copyOriginal(assetIdentifier: String, to destination: URL) async throws {
+    let currentStatus = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+    let status =
+      currentStatus == .notDetermined
+      ? await PHPhotoLibrary.requestAuthorization(for: .readWrite)
+      : currentStatus
+    guard status == .authorized || status == .limited else {
+      throw AppError.photoLibraryAccessRequired
+    }
+
+    let results = PHAsset.fetchAssets(
+      withLocalIdentifiers: [assetIdentifier],
+      options: nil
+    )
+    guard let asset = results.firstObject else {
+      throw AppError.photoLibraryAssetMissing
+    }
+    let resources = PHAssetResource.assetResources(for: asset)
+    guard
+      let resource = resources.first(where: { $0.type == .fullSizePhoto })
+        ?? resources.first(where: { $0.type == .photo })
+        ?? resources.first
+    else {
+      throw AppError.photoLibraryAssetMissing
+    }
+
+    let options = PHAssetResourceRequestOptions()
+    options.isNetworkAccessAllowed = true
+    try await withCheckedThrowingContinuation {
+      (continuation: CheckedContinuation<Void, Error>) in
+      PHAssetResourceManager.default().writeData(
+        for: resource,
+        toFile: destination,
+        options: options
+      ) { error in
+        if let error {
+          continuation.resume(throwing: error)
+        } else {
+          continuation.resume()
+        }
+      }
     }
   }
 }

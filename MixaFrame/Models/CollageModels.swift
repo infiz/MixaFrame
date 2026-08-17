@@ -36,6 +36,7 @@ struct CollageTask: Identifiable, Codable, Hashable {
   var savedLayoutSnapshot: SavedLayoutSnapshot?
   var backgroundHex: String = "FFFFFF"
   var latestExportFileName: String?
+  var exportedPhotoLibraryAssetIdentifier: String?
 
   var canvasCornerRadius: Double {
     get { cornerRadiusPercent ?? 0 }
@@ -84,6 +85,70 @@ struct CollageTask: Identifiable, Codable, Hashable {
   }
 }
 
+enum MixaFrameExportPreferences {
+  private static let formatKey = "exportPreferences.outputFormat"
+  private static let qualityKey = "exportPreferences.outputQuality"
+  private static let resolutionKey = "exportPreferences.outputMaxDimension"
+  private static let backgroundKey = "exportPreferences.collageBackground"
+  private static let spacingKey = "exportPreferences.layoutSpacing"
+  private static let canvasCornerRadiusKey = "exportPreferences.canvasCornerRadius"
+
+  static func apply(
+    to task: inout CollageTask,
+    defaults: UserDefaults = .standard
+  ) {
+    if let rawFormat = defaults.string(forKey: formatKey),
+      let format = OutputFormat(rawValue: rawFormat)
+    {
+      task.outputFormat = format
+    }
+    if let rawQuality = defaults.string(forKey: qualityKey),
+      let quality = OutputQuality(rawValue: rawQuality)
+    {
+      task.quality = quality
+    }
+    let resolution = defaults.integer(forKey: resolutionKey)
+    if (512...8192).contains(resolution) {
+      task.outputMaxDimension = resolution
+    }
+    if let rawBackground = defaults.string(forKey: backgroundKey),
+      let background = CollageBackground(rawValue: rawBackground)
+    {
+      task.background = background
+    }
+    if defaults.object(forKey: spacingKey) != nil {
+      task.spacing = min(40, max(0, defaults.double(forKey: spacingKey)))
+    }
+    if defaults.object(forKey: canvasCornerRadiusKey) != nil {
+      task.canvasCornerRadius = defaults.double(forKey: canvasCornerRadiusKey)
+    }
+  }
+
+  static func save(outputFormat: OutputFormat, defaults: UserDefaults = .standard) {
+    defaults.set(outputFormat.rawValue, forKey: formatKey)
+  }
+
+  static func save(quality: OutputQuality, defaults: UserDefaults = .standard) {
+    defaults.set(quality.rawValue, forKey: qualityKey)
+  }
+
+  static func save(outputMaxDimension: Int, defaults: UserDefaults = .standard) {
+    defaults.set(outputMaxDimension, forKey: resolutionKey)
+  }
+
+  static func save(background: CollageBackground, defaults: UserDefaults = .standard) {
+    defaults.set(background.rawValue, forKey: backgroundKey)
+  }
+
+  static func save(spacing: Double, defaults: UserDefaults = .standard) {
+    defaults.set(min(40, max(0, spacing)), forKey: spacingKey)
+  }
+
+  static func save(canvasCornerRadius: Double, defaults: UserDefaults = .standard) {
+    defaults.set(min(50, max(0, canvasCornerRadius)), forKey: canvasCornerRadiusKey)
+  }
+}
+
 struct CollageTaskEditorState: Equatable {
   let name: String
   let photos: [CollagePhotoEditorState]
@@ -109,6 +174,7 @@ struct CollageTaskEditorState: Equatable {
 struct CollagePhotoEditorState: Equatable {
   let id: UUID
   let fileName: String
+  let photoLibraryAssetIdentifier: String?
   let pixelWidth: Int
   let pixelHeight: Int
   let focalX: Double
@@ -125,6 +191,7 @@ extension CollageTask {
         CollagePhotoEditorState(
           id: $0.id,
           fileName: $0.fileName,
+          photoLibraryAssetIdentifier: $0.photoLibraryAssetIdentifier,
           pixelWidth: $0.pixelWidth,
           pixelHeight: $0.pixelHeight,
           focalX: $0.focalX,
@@ -262,6 +329,7 @@ enum CollageBackground: String, CaseIterable, Identifiable {
 struct CollagePhoto: Identifiable, Codable, Hashable {
   var id = UUID()
   var fileName: String
+  var photoLibraryAssetIdentifier: String?
   var pixelWidth: Int
   var pixelHeight: Int
   var focalX: Double = 0.5
@@ -420,6 +488,7 @@ enum OutputFormat: String, Codable, CaseIterable, Identifiable {
   case jpeg
   case png
   case webP
+  case heif
 
   var id: String { rawValue }
 
@@ -428,6 +497,7 @@ enum OutputFormat: String, Codable, CaseIterable, Identifiable {
     case .jpeg: "JPEG"
     case .png: "PNG"
     case .webP: "WebP"
+    case .heif: "HEIF"
     }
   }
 
@@ -436,6 +506,7 @@ enum OutputFormat: String, Codable, CaseIterable, Identifiable {
     case .jpeg: "jpg"
     case .png: "png"
     case .webP: "webp"
+    case .heif: "heic"
     }
   }
 
@@ -444,7 +515,12 @@ enum OutputFormat: String, Codable, CaseIterable, Identifiable {
     case .jpeg: "Small, widely compatible photo files"
     case .png: "Lossless quality and larger files"
     case .webP: "Efficient modern compression"
+    case .heif: "Apple-efficient photos with smaller files"
     }
+  }
+
+  var supportsTransparency: Bool {
+    self == .png || self == .webP
   }
 }
 
@@ -478,6 +554,11 @@ enum OutputQuality: String, Codable, CaseIterable, Identifiable {
     case .best: 0.98
     }
   }
+}
+
+enum PhotoLibraryExportMode {
+  case createNew
+  case replaceExisting
 }
 
 enum ResolutionPreset: Int, CaseIterable, Identifiable {

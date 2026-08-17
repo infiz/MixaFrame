@@ -177,7 +177,7 @@ private struct PassiveCollageCanvas: View {
       LayoutFrameShape(cornerRadiusFraction: CGFloat(task.canvasCornerRadius / 100))
     )
     .background {
-      if task.outputFormat == .jpeg {
+      if !task.outputFormat.supportsTransparency {
         Color.white
       }
     }
@@ -305,7 +305,7 @@ private struct CollageCanvasContent: View {
       LayoutFrameShape(cornerRadiusFraction: CGFloat(task.canvasCornerRadius / 100))
     )
     .background {
-      if task.outputFormat == .jpeg {
+      if !task.outputFormat.supportsTransparency {
         Color.white
       }
     }
