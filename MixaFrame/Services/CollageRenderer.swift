@@ -8,6 +8,7 @@ struct PreparedCollageExport: Identifiable {
   let fileURL: URL
   let previewImage: UIImage
   let outputSize: CGSize
+  let includesWatermark: Bool
 }
 
 enum CollageRenderer {
@@ -43,12 +44,17 @@ enum CollageRenderer {
         layoutFrames: layoutFrames,
         images: cgImages,
         canvasRect: CGRect(origin: .zero, size: outputSize),
-        context: context
+        context: context,
+        includesWatermark: false
       )
     }
   }
 
-  static func render(task: CollageTask, photoDirectory: URL) throws -> UIImage {
+  static func render(
+    task: CollageTask,
+    photoDirectory: URL,
+    includesWatermark: Bool = false
+  ) throws -> UIImage {
     guard task.photos.count >= 2 else { throw AppError.noPhotos }
     let outputSize = LayoutEngine.outputSize(for: task)
     guard outputSize.width <= maximumSide,
@@ -80,7 +86,8 @@ enum CollageRenderer {
         layoutFrames: layoutFrames,
         images: cgImages.map(Optional.some),
         canvasRect: CGRect(origin: .zero, size: outputSize),
-        context: context
+        context: context,
+        includesWatermark: includesWatermark
       )
     }
   }
@@ -90,7 +97,8 @@ enum CollageRenderer {
     layoutFrames: [LayoutFrame],
     images: [CGImage?],
     canvasRect: CGRect,
-    context: UIGraphicsImageRendererContext
+    context: UIGraphicsImageRendererContext,
+    includesWatermark: Bool
   ) {
     if task.outputFormat == .jpeg {
       UIColor.white.setFill()
@@ -131,15 +139,24 @@ enum CollageRenderer {
         )
       }
     }
+
+    if includesWatermark {
+      drawWatermark(in: canvasRect)
+    }
   }
 
   static func export(
     task: CollageTask,
     photoDirectory: URL,
     projectName: String = "Project",
-    date: Date = Date()
+    date: Date = Date(),
+    includesWatermark: Bool = false
   ) throws -> URL {
-    let image = try render(task: task, photoDirectory: photoDirectory)
+    let image = try render(
+      task: task,
+      photoDirectory: photoDirectory,
+      includesWatermark: includesWatermark
+    )
     return try writeExport(image: image, task: task, projectName: projectName, date: date)
   }
 
@@ -147,16 +164,22 @@ enum CollageRenderer {
     task: CollageTask,
     photoDirectory: URL,
     projectName: String = "Project",
-    date: Date = Date()
+    date: Date = Date(),
+    includesWatermark: Bool = false
   ) throws
     -> PreparedCollageExport
   {
-    let image = try render(task: task, photoDirectory: photoDirectory)
+    let image = try render(
+      task: task,
+      photoDirectory: photoDirectory,
+      includesWatermark: includesWatermark
+    )
     let url = try writeExport(image: image, task: task, projectName: projectName, date: date)
     return PreparedCollageExport(
       fileURL: url,
       previewImage: exportPreviewImage(from: image),
-      outputSize: image.size
+      outputSize: image.size,
+      includesWatermark: includesWatermark
     )
   }
 
@@ -271,6 +294,88 @@ enum CollageRenderer {
 
     guard let cropped = cgImage.cropping(to: crop.integral) else { return }
     UIImage(cgImage: cropped).draw(in: frame)
+  }
+
+  private static func drawWatermark(in canvasRect: CGRect) {
+    let fontSize = watermarkFontSize(in: canvasRect)
+    let font = watermarkFont(ofSize: fontSize)
+    let brandText = "MixaFrame" as NSString
+    let captionText = "CREATED WITH" as NSString
+    let shadow = NSShadow()
+    shadow.shadowColor = UIColor.black.withAlphaComponent(0.45)
+    shadow.shadowBlurRadius = fontSize * 0.12
+    shadow.shadowOffset = CGSize(width: 0, height: fontSize * 0.06)
+    let brandAttributes: [NSAttributedString.Key: Any] = [
+      .font: font,
+      .foregroundColor: UIColor.white,
+      .kern: fontSize * 0.018,
+      .shadow: shadow,
+    ]
+    let captionFontSize = max(6, fontSize * 0.3)
+    let captionAttributes: [NSAttributedString.Key: Any] = [
+      .font: UIFont.systemFont(ofSize: captionFontSize, weight: .bold),
+      .foregroundColor: UIColor.white.withAlphaComponent(0.82),
+      .kern: captionFontSize * 0.14,
+    ]
+    let brandSize = brandText.size(withAttributes: brandAttributes)
+    let captionSize = captionText.size(withAttributes: captionAttributes)
+    let horizontalPadding = fontSize * 0.78
+    let verticalPadding = fontSize * 0.38
+    let lineSpacing = fontSize * 0.08
+    let margin = max(fontSize * 0.72, min(canvasRect.width, canvasRect.height) * 0.025)
+    let contentWidth = max(brandSize.width, captionSize.width)
+    let contentHeight = captionSize.height + lineSpacing + brandSize.height
+    let backgroundSize = CGSize(
+      width: contentWidth + horizontalPadding * 2,
+      height: contentHeight + verticalPadding * 2
+    )
+    let backgroundRect = CGRect(
+      x: canvasRect.maxX - backgroundSize.width - margin,
+      y: canvasRect.maxY - backgroundSize.height - margin,
+      width: backgroundSize.width,
+      height: backgroundSize.height
+    )
+    let contentTop = backgroundRect.midY - contentHeight / 2
+
+    let badgePath = UIBezierPath(
+      roundedRect: backgroundRect,
+      cornerRadius: backgroundRect.height / 2
+    )
+    UIColor.black.withAlphaComponent(0.68).setFill()
+    badgePath.fill()
+    UIColor.white.withAlphaComponent(0.22).setStroke()
+    badgePath.lineWidth = max(1, fontSize * 0.025)
+    badgePath.stroke()
+
+    captionText.draw(
+      at: CGPoint(
+        x: backgroundRect.midX - captionSize.width / 2,
+        y: contentTop
+      ),
+      withAttributes: captionAttributes
+    )
+    brandText.draw(
+      at: CGPoint(
+        x: backgroundRect.midX - brandSize.width / 2,
+        y: contentTop + captionSize.height + lineSpacing
+      ),
+      withAttributes: brandAttributes
+    )
+  }
+
+  static func watermarkFontSize(in canvasRect: CGRect) -> CGFloat {
+    max(18, min(canvasRect.width, canvasRect.height) * 0.04)
+  }
+
+  static func watermarkFont(ofSize size: CGFloat) -> UIFont {
+    if let avenirNext = UIFont(name: "AvenirNext-DemiBold", size: size) {
+      return avenirNext
+    }
+    let systemFont = UIFont.systemFont(ofSize: size, weight: .bold)
+    guard let roundedDescriptor = systemFont.fontDescriptor.withDesign(.rounded) else {
+      return systemFont
+    }
+    return UIFont(descriptor: roundedDescriptor, size: size)
   }
 
   private static func clippingPath(for layoutFrame: LayoutFrame) -> UIBezierPath {

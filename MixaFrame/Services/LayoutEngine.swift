@@ -60,6 +60,14 @@ enum LayoutEngine {
   static func outputSize(for task: CollageTask) -> CGSize {
     let maxDimension = CGFloat(max(512, min(task.outputMaxDimension, 8192)))
 
+    if let snapshot = activeSavedLayoutSnapshot(for: task) {
+      let ratio = CGFloat(snapshot.outputAspectRatio)
+      if ratio >= 1 {
+        return CGSize(width: maxDimension, height: (maxDimension / ratio).rounded())
+      }
+      return CGSize(width: (maxDimension * ratio).rounded(), height: maxDimension)
+    }
+
     if isNaturalVerticalStrip(task) {
       let spacing = scaledSpacing(task.spacing, outputWidth: maxDimension)
       let photoHeight = task.photos.reduce(CGFloat.zero) { partial, photo in
@@ -77,6 +85,17 @@ enum LayoutEngine {
   }
 
   static func selectedTemplate(for task: CollageTask) -> CollageLayoutTemplate {
+    if let snapshot = activeSavedLayoutSnapshot(for: task),
+      LayoutCatalog.template(id: task.layoutID, photoCount: task.photos.count) == nil
+    {
+      return CollageLayoutTemplate(
+        id: snapshot.sourceLayoutID ?? "saved-layout-\(task.id.uuidString)",
+        title: snapshot.sourceLayoutTitle,
+        family: LayoutFamily(rawValue: snapshot.sourceLayoutFamily) ?? .grid,
+        recipe: .custom,
+        legacyLayout: nil
+      )
+    }
     let template = LayoutCatalog.selectedTemplate(for: task)
     guard template.family == .hero || template.family == .editorial,
       let requestedMainCount = mainPhotoCount(for: task)
@@ -107,6 +126,8 @@ enum LayoutEngine {
         mainCount: mainCount
       )
       recipe = .bands(axis: axis, counts: adjusted.counts, weights: adjusted.weights)
+    case .partition(let style, _):
+      recipe = .partition(style: style, mainCount: mainCount)
     default:
       return template
     }
@@ -155,10 +176,9 @@ enum LayoutEngine {
 
   static func layoutSamples(
     family: LayoutFamily,
-    photoCount: Int,
-    mainPhotoCount: Int
+    photoCount: Int
   ) -> [CollageLayoutTemplate] {
-    let layouts = LayoutCatalog.templates(photoCount: max(1, photoCount)).filter { template in
+    LayoutCatalog.templates(photoCount: max(1, photoCount)).filter { template in
       switch family.browserFamily {
       case .hero:
         if template.family == .hero { return true }
@@ -170,9 +190,29 @@ enum LayoutEngine {
         return template.family == family
       }
     }
+  }
+
+  static func layoutSamples(
+    family: LayoutFamily,
+    photoCount: Int,
+    mainPhotoCount: Int
+  ) -> [CollageLayoutTemplate] {
+    let layouts = layoutSamples(family: family, photoCount: photoCount)
     guard family.browserFamily == .hero, photoCount > 1 else { return layouts }
     let resolvedMainCount = min(max(1, mainPhotoCount), min(3, photoCount - 1))
     return layouts.filter { defaultMainPhotoCount(for: $0.recipe) == resolvedMainCount }
+  }
+
+  static func fittingLayoutSamples(
+    family: LayoutFamily,
+    task: CollageTask
+  ) -> [CollageLayoutTemplate] {
+    fittingLayoutSamples(
+      family: family,
+      task: task,
+      samples: layoutSamples(family: family, photoCount: max(1, task.photos.count)),
+      includesEveryDistinctSample: family.browserFamily == .hero
+    )
   }
 
   static func fittingLayoutSamples(
@@ -185,22 +225,50 @@ enum LayoutEngine {
       photoCount: max(1, task.photos.count),
       mainPhotoCount: mainPhotoCount
     )
+    return fittingLayoutSamples(
+      family: family,
+      task: task,
+      samples: samples,
+      includesEveryDistinctSample: false
+    )
+  }
+
+  private static func fittingLayoutSamples(
+    family: LayoutFamily,
+    task: CollageTask,
+    samples: [CollageLayoutTemplate],
+    includesEveryDistinctSample: Bool
+  ) -> [CollageLayoutTemplate] {
     guard task.photos.count > 1 else { return samples }
 
-    let assessed = samples.map { template in
-      (template, photoFit(for: template, task: task))
+    var distinctSamples: [String: (CollageLayoutTemplate, LayoutPhotoFit)] = [:]
+    for template in samples {
+      let fit = photoFit(for: template, task: task)
+      let key = layoutGeometryKey(for: template, task: task)
+      guard let existing = distinctSamples[key] else {
+        distinctSamples[key] = (template, fit)
+        continue
+      }
+      let selectedID = task.layoutID
+      if template.id == selectedID
+        || (existing.0.id != selectedID && fit.score > existing.1.score)
+      {
+        distinctSamples[key] = (template, fit)
+      }
     }
+    let assessed = Array(distinctSamples.values)
     let bestScore = assessed.map { $0.1.score }.max() ?? 0
     let relativeFloor = bestScore - 0.1
     let stronglyFitting = assessed.filter { _, fit in
       fit.averageVisibleFraction >= 0.68 && fit.minimumVisibleFraction >= 0.42
     }
-    let candidates = stronglyFitting.isEmpty ? assessed : stronglyFitting
+    let fittingCandidates = stronglyFitting.isEmpty ? assessed : stronglyFitting
+    let candidates =
+      includesEveryDistinctSample
+      ? assessed
+      : fittingCandidates.filter { _, fit in fit.score >= relativeFloor }
     return
       candidates
-      .filter { _, fit in
-        fit.score >= relativeFloor
-      }
       .sorted { left, right in
         if family == .grid {
           let leftIsSmartGrid = left.0.legacyLayout == .smartGrid
@@ -213,6 +281,36 @@ enum LayoutEngine {
         return left.0.id < right.0.id
       }
       .map(\.0)
+  }
+
+  private static func layoutGeometryKey(
+    for template: CollageLayoutTemplate,
+    task: CollageTask
+  ) -> String {
+    var previewTask = task
+    previewTask.layoutID = template.id
+    previewTask.mainPhotoCount = defaultMainPhotoCount(for: template.recipe)
+    previewTask.isPhotoOrderManuallyAdjusted = true
+    previewTask.spacing = 0
+    previewTask.clearLayoutCustomization()
+    previewTask.clearCustomLayout()
+    let size = outputSize(for: previewTask)
+    let frameKeys = layoutFrames(for: previewTask, in: size).map { frame in
+      let rect = frame.rect
+      let values = [
+        rect.minX / max(size.width, 1),
+        rect.minY / max(size.height, 1),
+        rect.width / max(size.width, 1),
+        rect.height / max(size.height, 1),
+        frame.cornerRadiusFraction,
+        frame.rotationDegrees / 360,
+      ]
+      let polygon = frame.normalizedClipPolygon?.flatMap { [$0.x, $0.y] } ?? []
+      return (values + polygon).map { String(format: "%.4f", Double($0)) }
+        .joined(separator: ",")
+        + (frame.usesAspectFit ? ":fit" : ":fill")
+    }
+    return frameKeys.sorted().joined(separator: "|")
   }
 
   static func recommendedCanvasAndTemplate(
@@ -329,9 +427,40 @@ enum LayoutEngine {
 
   static func layoutFrames(for task: CollageTask, in size: CGSize) -> [LayoutFrame] {
     guard !task.photos.isEmpty else { return [] }
+    if let snapshot = activeSavedLayoutSnapshot(for: task) {
+      return snapshot.frames.map { savedFrame in
+        LayoutFrame(
+          rect: savedFrame.rect.rect(in: size),
+          normalizedClipPolygon: savedFrame.clipPolygon?.map {
+            CGPoint(x: CGFloat($0.x), y: CGFloat($0.y))
+          },
+          cornerRadiusFraction: CGFloat(savedFrame.cornerRadiusFraction),
+          rotationDegrees: CGFloat(savedFrame.rotationDegrees),
+          zIndex: savedFrame.zIndex,
+          usesAspectFit: savedFrame.usesAspectFit
+        )
+      }
+    }
     let spacing = scaledSpacing(task.spacing, outputWidth: size.width)
+    let selectedTemplate = selectedTemplate(for: task)
+    if case .custom = selectedTemplate.recipe,
+      let normalizedFrames = task.customLayoutFrames,
+      normalizedFrames.count == task.photos.count,
+      normalizedFrames.allSatisfy(\.isValid)
+    {
+      let structuralFrames = normalizedFrames.map { $0.rect(in: size) }
+      let frames = partitionFramesApplyingSpacing(
+        structuralFrames,
+        in: CGRect(origin: .zero, size: size),
+        spacing: spacing
+      ).map { LayoutFrame(rect: $0) }
+      if task.usesAutomaticPhotoArrangement, task.photos.count == frames.count {
+        return framesAssignedByPhoto(visualFrames: frames, photos: task.photos)
+      }
+      return frames
+    }
     var frames = layoutFrames(
-      template: selectedTemplate(for: task),
+      template: selectedTemplate,
       photoCount: task.photos.count,
       photoAspectRatios: task.photos.map(\.aspectRatio),
       photos: task.photos,
@@ -355,6 +484,48 @@ enum LayoutEngine {
       }
     }
     return frames
+  }
+
+  static func savedLayoutSnapshot(for task: CollageTask) -> SavedLayoutSnapshot? {
+    guard !task.photos.isEmpty else { return nil }
+    if case .custom = selectedTemplate(for: task).recipe, task.customLayoutFrames != nil {
+      return nil
+    }
+    let size = outputSize(for: task)
+    let frames = layoutFrames(for: task, in: size)
+    guard frames.count == task.photos.count, size.width > 0, size.height > 0 else { return nil }
+    let template = selectedTemplate(for: task)
+    return SavedLayoutSnapshot(
+      sourceLayoutID: task.layoutID,
+      sourceLayoutTitle: template.title,
+      sourceLayoutFamily: template.family.rawValue,
+      photoCount: task.photos.count,
+      outputAspectRatio: Double(size.width / size.height),
+      frames: frames.map { frame in
+        SavedLayoutFrame(
+          rect: NormalizedLayoutFrame(rect: frame.rect, in: size),
+          clipPolygon: frame.normalizedClipPolygon?.map {
+            NormalizedLayoutPoint(x: Double($0.x), y: Double($0.y))
+          },
+          cornerRadiusFraction: Double(frame.cornerRadiusFraction),
+          rotationDegrees: Double(frame.rotationDegrees),
+          zIndex: frame.zIndex,
+          usesAspectFit: frame.usesAspectFit
+        )
+      }
+    )
+  }
+
+  static func activeSavedLayoutSnapshot(for task: CollageTask) -> SavedLayoutSnapshot? {
+    guard let snapshot = task.savedLayoutSnapshot,
+      snapshot.sourceLayoutID == task.layoutID,
+      snapshot.photoCount == task.photos.count,
+      snapshot.frames.count == task.photos.count,
+      snapshot.outputAspectRatio.isFinite,
+      snapshot.outputAspectRatio > 0,
+      snapshot.frames.allSatisfy({ $0.rect.isValid })
+    else { return nil }
+    return snapshot
   }
 
   static func previewFrames(
@@ -482,6 +653,9 @@ enum LayoutEngine {
 
   static func layoutDividers(for task: CollageTask, in size: CGSize) -> [LayoutDivider] {
     guard task.photos.count > 1 else { return [] }
+    if activeSavedLayoutSnapshot(for: task) != nil {
+      return frameOverrideDividers(for: task, in: size)
+    }
     guard let adjustment = layoutAdjustmentGrid(for: task, in: size) else {
       return frameOverrideDividers(for: task, in: size)
     }
@@ -606,6 +780,89 @@ enum LayoutEngine {
       }
     }
     return frames.map { NormalizedLayoutFrame(rect: $0, in: size) }
+  }
+
+  static func adjustedSavedLayoutFrames(
+    for task: CollageTask,
+    moving divider: LayoutDivider,
+    normalizedDelta: Double
+  ) -> [SavedLayoutFrame]? {
+    guard let snapshot = activeSavedLayoutSnapshot(for: task),
+      let adjustedRects = adjustedFrameOverrides(
+        for: task,
+        moving: divider,
+        normalizedDelta: normalizedDelta
+      ),
+      adjustedRects.count == snapshot.frames.count
+    else { return nil }
+    return zip(snapshot.frames, adjustedRects).map { savedFrame, rect in
+      var adjusted = savedFrame
+      adjusted.rect = rect
+      return adjusted
+    }
+  }
+
+  static func adjustedCustomLayoutFrames(
+    for task: CollageTask,
+    moving divider: LayoutDivider,
+    normalizedDelta: Double
+  ) -> [NormalizedLayoutFrame]? {
+    guard case .custom = selectedTemplate(for: task).recipe,
+      case .frames(let leadingIndices, let trailingIndices) = divider.adjustment,
+      let customFrames = task.customLayoutFrames,
+      customFrames.count == task.photos.count,
+      !leadingIndices.isEmpty,
+      !trailingIndices.isEmpty,
+      (leadingIndices + trailingIndices).allSatisfy({ customFrames.indices.contains($0) })
+    else { return nil }
+
+    var frames = customFrames.map {
+      CGRect(x: $0.x, y: $0.y, width: $0.width, height: $0.height)
+    }
+    let minimumLength: CGFloat = 0.04
+    let requestedDelta = CGFloat(normalizedDelta)
+    let maximumNegativeDelta: CGFloat
+    let maximumPositiveDelta: CGFloat
+    switch divider.axis {
+    case .horizontal:
+      maximumNegativeDelta = leadingIndices.reduce(-CGFloat.greatestFiniteMagnitude) {
+        max($0, minimumLength - frames[$1].height)
+      }
+      maximumPositiveDelta = trailingIndices.reduce(CGFloat.greatestFiniteMagnitude) {
+        min($0, frames[$1].height - minimumLength)
+      }
+    case .vertical:
+      maximumNegativeDelta = leadingIndices.reduce(-CGFloat.greatestFiniteMagnitude) {
+        max($0, minimumLength - frames[$1].width)
+      }
+      maximumPositiveDelta = trailingIndices.reduce(CGFloat.greatestFiniteMagnitude) {
+        min($0, frames[$1].width - minimumLength)
+      }
+    }
+    let delta = min(maximumPositiveDelta, max(maximumNegativeDelta, requestedDelta))
+    guard delta.isFinite else { return nil }
+
+    for index in leadingIndices {
+      switch divider.axis {
+      case .horizontal: frames[index].size.height += delta
+      case .vertical: frames[index].size.width += delta
+      }
+    }
+    for index in trailingIndices {
+      switch divider.axis {
+      case .horizontal:
+        frames[index].origin.y += delta
+        frames[index].size.height -= delta
+      case .vertical:
+        frames[index].origin.x += delta
+        frames[index].size.width -= delta
+      }
+    }
+    return frames.map {
+      NormalizedLayoutFrame(
+        x: Double($0.minX), y: Double($0.minY),
+        width: Double($0.width), height: Double($0.height))
+    }
   }
 
   private static func frameOverrideDividers(
@@ -751,6 +1008,8 @@ enum LayoutEngine {
     case .bands(_, let counts, let weights):
       guard !counts.isEmpty else { return nil }
       return counts[editorialMainBandIndex(counts: counts, weights: weights)]
+    case .partition(_, let mainCount):
+      return mainCount
     default:
       return nil
     }
@@ -764,6 +1023,8 @@ enum LayoutEngine {
       guard !counts.isEmpty else { return nil }
       let mainIndex = editorialMainBandIndex(counts: counts, weights: weights)
       return "editorial-\(axis)-\(counts.count)-\(mainIndex)"
+    case .partition(let style, let mainCount) where mainCount != nil:
+      return "partition-\(style.rawValue)"
     default:
       return nil
     }
@@ -1078,6 +1339,28 @@ enum LayoutEngine {
       )
       return arranged(frames)
 
+    case .partition(let style, let mainCount):
+      return arranged(
+        partitionFrames(
+          style: style,
+          mainCount: mainCount,
+          count: photoCount,
+          photoAspectRatios: photoAspectRatios,
+          in: rect,
+          spacing: spacing
+        ).map { LayoutFrame(rect: $0) })
+
+    case .custom:
+      return arranged(
+        partitionFrames(
+          style: .aspectAware,
+          mainCount: nil,
+          count: photoCount,
+          photoAspectRatios: photoAspectRatios,
+          in: rect,
+          spacing: spacing
+        ).map { LayoutFrame(rect: $0) })
+
     case .cards(let rotation, let spread):
       return arranged(
         cardFrames(count: photoCount, rotation: rotation, spread: spread, in: rect))
@@ -1103,6 +1386,314 @@ enum LayoutEngine {
           rotationDegrees: rotation
         )
       ])
+    }
+  }
+
+  private static func partitionFrames(
+    style: PartitionLayoutStyle,
+    mainCount requestedMainCount: Int?,
+    count: Int,
+    photoAspectRatios: [CGFloat],
+    in rect: CGRect,
+    spacing: CGFloat
+  ) -> [CGRect] {
+    let mainCount = min(max(1, requestedMainCount ?? 1), max(1, count - 1))
+    let structuralFrames: [CGRect]
+    switch style {
+    case .aspectAware:
+      let safeRatios = photoAspectRatios.prefix(count).map { max(0.2, min(5, $0)) }
+      let desiredRatio =
+        safeRatios.isEmpty
+        ? CGFloat(1)
+        : exp(safeRatios.map { log($0) }.reduce(0, +) / CGFloat(safeRatios.count))
+      structuralFrames = balancedPartitionFrames(
+        count: count,
+        in: rect,
+        preferredAspectRatio: desiredRatio,
+        depth: 0
+      )
+
+    case .cornerAnchor:
+      let secondaryCount = count - mainCount
+      if secondaryCount == 1 {
+        let splitX = rect.minX + rect.width * 0.68
+        let main = CGRect(
+          x: rect.minX, y: rect.minY,
+          width: splitX - rect.minX, height: rect.height)
+        let secondary = CGRect(
+          x: splitX, y: rect.minY,
+          width: rect.maxX - splitX, height: rect.height)
+        structuralFrames =
+          balancedPartitionFrames(count: mainCount, in: main, depth: 0)
+          + [secondary]
+        break
+      }
+      let main = CGRect(
+        x: rect.minX, y: rect.minY,
+        width: rect.width * 0.62, height: rect.height * 0.62)
+      let right = CGRect(
+        x: main.maxX, y: rect.minY,
+        width: rect.maxX - main.maxX, height: rect.height)
+      let bottom = CGRect(
+        x: rect.minX, y: main.maxY,
+        width: main.width, height: rect.maxY - main.maxY)
+      structuralFrames =
+        balancedPartitionFrames(count: mainCount, in: main, depth: 0)
+        + distributedPartitionFrames(
+          count: count - mainCount,
+          regions: [right, bottom]
+        )
+
+    case .dualAnchor:
+      let secondaryCount = count - mainCount
+      if secondaryCount == 1 {
+        let splitY = rect.minY + rect.height * 0.68
+        let main = CGRect(
+          x: rect.minX, y: rect.minY,
+          width: rect.width, height: splitY - rect.minY)
+        let secondary = CGRect(
+          x: rect.minX, y: splitY,
+          width: rect.width, height: rect.maxY - splitY)
+        structuralFrames =
+          balancedPartitionFrames(count: mainCount, in: main, depth: 0)
+          + [secondary]
+        break
+      }
+      let splitX = rect.minX + rect.width * 0.57
+      let splitY = rect.minY + rect.height * 0.56
+      let mainA = CGRect(
+        x: rect.minX, y: rect.minY,
+        width: splitX - rect.minX, height: splitY - rect.minY)
+      let mainB = CGRect(
+        x: splitX, y: splitY,
+        width: rect.maxX - splitX, height: rect.maxY - splitY)
+      let topRight = CGRect(
+        x: splitX, y: rect.minY,
+        width: rect.maxX - splitX, height: splitY - rect.minY)
+      let bottomLeft = CGRect(
+        x: rect.minX, y: splitY,
+        width: splitX - rect.minX, height: rect.maxY - splitY)
+      let firstMainCount = Int(ceil(Double(mainCount) / 2))
+      let secondMainCount = mainCount - firstMainCount
+      var mainFrames = balancedPartitionFrames(count: firstMainCount, in: mainA, depth: 0)
+      var secondaryRegions = [topRight, bottomLeft]
+      if secondMainCount > 0 {
+        mainFrames += balancedPartitionFrames(count: secondMainCount, in: mainB, depth: 1)
+      } else {
+        secondaryRegions.append(mainB)
+      }
+      structuralFrames =
+        mainFrames
+        + distributedPartitionFrames(
+          count: count - mainCount,
+          regions: secondaryRegions
+        )
+
+    case .pinwheel:
+      let x1 = rect.minX + rect.width * 0.32
+      let x2 = rect.minX + rect.width * 0.68
+      let y1 = rect.minY + rect.height * 0.31
+      let y2 = rect.minY + rect.height * 0.69
+      structuralFrames = distributedPartitionFrames(
+        count: count,
+        regions: [
+          CGRect(x: rect.minX, y: rect.minY, width: x2 - rect.minX, height: y1 - rect.minY),
+          CGRect(x: x2, y: rect.minY, width: rect.maxX - x2, height: y2 - rect.minY),
+          CGRect(x: x1, y: y2, width: rect.maxX - x1, height: rect.maxY - y2),
+          CGRect(x: rect.minX, y: y1, width: x1 - rect.minX, height: rect.maxY - y1),
+          CGRect(x: x1, y: y1, width: x2 - x1, height: y2 - y1),
+        ]
+      )
+
+    case .centerWindow:
+      let secondaryCount = count - mainCount
+      if secondaryCount < 4 {
+        if secondaryCount == 1 {
+          let splitY = rect.minY + rect.height * 0.72
+          let main = CGRect(
+            x: rect.minX, y: rect.minY,
+            width: rect.width, height: splitY - rect.minY)
+          let secondary = CGRect(
+            x: rect.minX, y: splitY,
+            width: rect.width, height: rect.maxY - splitY)
+          structuralFrames =
+            balancedPartitionFrames(count: mainCount, in: main, depth: 0)
+            + [secondary]
+        } else {
+          let topY = rect.minY + rect.height * 0.2
+          let bottomY = rect.minY + rect.height * 0.8
+          let center = CGRect(
+            x: rect.minX, y: topY,
+            width: rect.width, height: bottomY - topY)
+          structuralFrames =
+            balancedPartitionFrames(count: mainCount, in: center, depth: 0)
+            + distributedPartitionFrames(
+              count: secondaryCount,
+              regions: [
+                CGRect(
+                  x: rect.minX, y: rect.minY,
+                  width: rect.width, height: topY - rect.minY),
+                CGRect(
+                  x: rect.minX, y: bottomY,
+                  width: rect.width, height: rect.maxY - bottomY),
+              ]
+            )
+        }
+        break
+      }
+      let x1 = rect.minX + rect.width * 0.25
+      let x2 = rect.minX + rect.width * 0.75
+      let y1 = rect.minY + rect.height * 0.24
+      let y2 = rect.minY + rect.height * 0.76
+      let center = CGRect(x: x1, y: y1, width: x2 - x1, height: y2 - y1)
+      structuralFrames =
+        balancedPartitionFrames(count: mainCount, in: center, depth: 0)
+        + distributedPartitionFrames(
+          count: count - mainCount,
+          regions: [
+            CGRect(x: rect.minX, y: rect.minY, width: rect.width, height: y1 - rect.minY),
+            CGRect(x: rect.minX, y: y2, width: rect.width, height: rect.maxY - y2),
+            CGRect(x: rect.minX, y: y1, width: x1 - rect.minX, height: y2 - y1),
+            CGRect(x: x2, y: y1, width: rect.maxX - x2, height: y2 - y1),
+          ]
+        )
+
+    case .goldenSpiral:
+      structuralFrames = goldenSpiralPartitionFrames(count: count, in: rect)
+
+    case .tJunction:
+      structuralFrames = tJunctionPartitionFrames(count: count, in: rect)
+    }
+    return partitionFramesApplyingSpacing(structuralFrames, in: rect, spacing: spacing)
+  }
+
+  private static func balancedPartitionFrames(
+    count: Int,
+    in rect: CGRect,
+    preferredAspectRatio: CGFloat = 1,
+    depth: Int
+  ) -> [CGRect] {
+    guard count > 1 else { return [rect] }
+    let firstCount = count / 2
+    let fraction = CGFloat(firstCount) / CGFloat(count)
+    let vertical =
+      rect.width / max(rect.height, 1) > preferredAspectRatio
+      || (rect.width / max(rect.height, 1) > preferredAspectRatio * 0.72
+        && depth.isMultiple(of: 2))
+    let first: CGRect
+    let second: CGRect
+    if vertical {
+      let splitX = rect.minX + rect.width * fraction
+      first = CGRect(x: rect.minX, y: rect.minY, width: splitX - rect.minX, height: rect.height)
+      second = CGRect(x: splitX, y: rect.minY, width: rect.maxX - splitX, height: rect.height)
+    } else {
+      let splitY = rect.minY + rect.height * fraction
+      first = CGRect(x: rect.minX, y: rect.minY, width: rect.width, height: splitY - rect.minY)
+      second = CGRect(x: rect.minX, y: splitY, width: rect.width, height: rect.maxY - splitY)
+    }
+    return balancedPartitionFrames(
+      count: firstCount, in: first, preferredAspectRatio: preferredAspectRatio, depth: depth + 1)
+      + balancedPartitionFrames(
+        count: count - firstCount, in: second,
+        preferredAspectRatio: preferredAspectRatio, depth: depth + 1)
+  }
+
+  private static func distributedPartitionFrames(
+    count: Int,
+    regions: [CGRect]
+  ) -> [CGRect] {
+    guard count > 0, !regions.isEmpty else { return [] }
+    let usedRegions = Array(regions.prefix(min(count, regions.count)))
+    var counts = Array(repeating: 1, count: usedRegions.count)
+    for _ in usedRegions.count..<count {
+      let index =
+        usedRegions.indices.max { left, right in
+          usedRegions[left].width * usedRegions[left].height / CGFloat(counts[left])
+            < usedRegions[right].width * usedRegions[right].height / CGFloat(counts[right])
+        } ?? 0
+      counts[index] += 1
+    }
+    return usedRegions.indices.flatMap { index in
+      balancedPartitionFrames(count: counts[index], in: usedRegions[index], depth: index)
+    }
+  }
+
+  private static func goldenSpiralPartitionFrames(count: Int, in sourceRect: CGRect) -> [CGRect] {
+    guard count > 2 else { return balancedPartitionFrames(count: count, in: sourceRect, depth: 0) }
+    var result: [CGRect] = []
+    var rect = sourceRect
+    for index in 0..<(count - 2) {
+      let fraction: CGFloat = 0.36
+      switch index % 4 {
+      case 0:
+        let width = rect.width * fraction
+        result.append(CGRect(x: rect.minX, y: rect.minY, width: width, height: rect.height))
+        rect = CGRect(
+          x: rect.minX + width, y: rect.minY, width: rect.width - width, height: rect.height)
+      case 1:
+        let height = rect.height * fraction
+        result.append(CGRect(x: rect.minX, y: rect.minY, width: rect.width, height: height))
+        rect = CGRect(
+          x: rect.minX, y: rect.minY + height, width: rect.width, height: rect.height - height)
+      case 2:
+        let width = rect.width * fraction
+        result.append(CGRect(x: rect.maxX - width, y: rect.minY, width: width, height: rect.height))
+        rect = CGRect(x: rect.minX, y: rect.minY, width: rect.width - width, height: rect.height)
+      default:
+        let height = rect.height * fraction
+        result.append(
+          CGRect(x: rect.minX, y: rect.maxY - height, width: rect.width, height: height))
+        rect = CGRect(x: rect.minX, y: rect.minY, width: rect.width, height: rect.height - height)
+      }
+    }
+    return result + balancedPartitionFrames(count: 2, in: rect, depth: 0)
+  }
+
+  private static func tJunctionPartitionFrames(count: Int, in rect: CGRect) -> [CGRect] {
+    let leftCount = max(2, Int(ceil(Double(count) * 0.43)))
+    let rightCount = count - leftCount
+    let splitX = rect.minX + rect.width * 0.44
+    let left = CGRect(x: rect.minX, y: rect.minY, width: splitX - rect.minX, height: rect.height)
+    let right = CGRect(x: splitX, y: rect.minY, width: rect.maxX - splitX, height: rect.height)
+    let leftTopCount = max(1, Int(floor(Double(leftCount) * 0.58)))
+    let rightTopCount = max(1, Int(ceil(Double(rightCount) * 0.42)))
+    let leftSplitY = left.minY + left.height * 0.58
+    let rightSplitY = right.minY + right.height * 0.42
+    return balancedPartitionFrames(
+      count: leftTopCount,
+      in: CGRect(x: left.minX, y: left.minY, width: left.width, height: leftSplitY - left.minY),
+      depth: 1)
+      + balancedPartitionFrames(
+        count: leftCount - leftTopCount,
+        in: CGRect(x: left.minX, y: leftSplitY, width: left.width, height: left.maxY - leftSplitY),
+        depth: 2)
+      + balancedPartitionFrames(
+        count: rightTopCount,
+        in: CGRect(
+          x: right.minX, y: right.minY, width: right.width, height: rightSplitY - right.minY),
+        depth: 2)
+      + balancedPartitionFrames(
+        count: rightCount - rightTopCount,
+        in: CGRect(
+          x: right.minX, y: rightSplitY, width: right.width, height: right.maxY - rightSplitY),
+        depth: 1)
+  }
+
+  private static func partitionFramesApplyingSpacing(
+    _ frames: [CGRect],
+    in bounds: CGRect,
+    spacing: CGFloat
+  ) -> [CGRect] {
+    let halfSpacing = max(0, spacing) / 2
+    let tolerance = max(0.5, min(bounds.width, bounds.height) * 0.000_01)
+    return frames.map { frame in
+      let minX = frame.minX + (frame.minX > bounds.minX + tolerance ? halfSpacing : 0)
+      let minY = frame.minY + (frame.minY > bounds.minY + tolerance ? halfSpacing : 0)
+      let maxX = frame.maxX - (frame.maxX < bounds.maxX - tolerance ? halfSpacing : 0)
+      let maxY = frame.maxY - (frame.maxY < bounds.maxY - tolerance ? halfSpacing : 0)
+      return CGRect(
+        x: minX, y: minY,
+        width: max(1, maxX - minX), height: max(1, maxY - minY))
     }
   }
 
