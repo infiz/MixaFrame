@@ -38,7 +38,7 @@ The deployment target is iOS 17.6. Xcode resolves the MIT-licensed `SDWebImageWe
 - Draggable dividers for every multi-photo layout, with persistent custom geometry and one-tap reset to template sizing.
 - Add Photos thumbnails show the on-device detected face or salient-object region with a translucent red focus box.
 - Manual focal-point adjustment, photo reordering, and spacing controls.
-- JPEG, PNG, and WebP export with Space Saver, Balanced, and Best Quality presets.
+- JPEG, PNG, WebP, and Apple HEIF export with Space Saver, Balanced, and Best Quality presets.
 - Save to Photos and standard iOS sharing/Save to Files.
 - A full-screen export review with pinch zoom, pan, explicit zoom controls, and reset before Save to Photos or sharing.
 - Full-screen inspection of any original-resolution source photo from the editor via double-tap or an explicit action, with pinch zoom, pan, zoom controls, and reset.

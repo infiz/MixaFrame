@@ -1,15 +1,19 @@
+import Photos
 import SwiftUI
 import UIKit
 
 struct ExportPreviewView: View {
   let export: PreparedCollageExport
   let formatTitle: String
-  let onSave: () async throws -> Void
+  let existingPhotoAssetIdentifier: String?
+  let onSave: (PhotoLibraryExportMode) async throws -> Void
   let onShare: () async throws -> Void
   let onCancel: () -> Void
 
   @State private var isSaving = false
   @State private var errorMessage: String?
+  @State private var isPhotoExportChoicePresented = false
+  @State private var pendingPhotoLibraryExportMode: PhotoLibraryExportMode?
 
   var body: some View {
     NavigationStack {
@@ -42,9 +46,7 @@ struct ExportPreviewView: View {
             .lineLimit(1)
             .truncationMode(.middle)
             .frame(maxWidth: .infinity, alignment: .leading)
-          Text(
-            "\(Int(export.outputSize.width)) × \(Int(export.outputSize.height)) px · \(formatTitle)"
-          )
+          Text(exportDetails)
           .font(.caption)
           .foregroundStyle(.secondary)
           if export.includesWatermark {
@@ -54,7 +56,11 @@ struct ExportPreviewView: View {
               .frame(maxWidth: .infinity, alignment: .leading)
           }
           Button {
-            saveToPhotos()
+            if existingPhotoAssetIdentifier != nil {
+              isPhotoExportChoicePresented = true
+            } else {
+              saveToPhotos(mode: .createNew)
+            }
           } label: {
             HStack {
               if isSaving { ProgressView().tint(.white) }
@@ -75,6 +81,23 @@ struct ExportPreviewView: View {
       }
     }
     .interactiveDismissDisabled(true)
+    .sheet(isPresented: $isPhotoExportChoicePresented, onDismiss: completePhotoExportChoice) {
+      if let existingPhotoAssetIdentifier {
+        ExistingPhotoExportChoiceView(
+          assetIdentifier: existingPhotoAssetIdentifier,
+          onSelect: { mode in
+            pendingPhotoLibraryExportMode = mode
+            isPhotoExportChoicePresented = false
+          },
+          onCancel: {
+            pendingPhotoLibraryExportMode = nil
+            isPhotoExportChoicePresented = false
+          }
+        )
+        .presentationDetents([.medium])
+        .presentationDragIndicator(.visible)
+      }
+    }
     .alert(
       "Save Failed",
       isPresented: Binding(
@@ -88,16 +111,41 @@ struct ExportPreviewView: View {
     }
   }
 
-  private func saveToPhotos() {
+  private func saveToPhotos(mode: PhotoLibraryExportMode) {
     isSaving = true
     Task {
       do {
-        try await onSave()
+        try await onSave(mode)
       } catch {
         errorMessage = error.localizedDescription
       }
       isSaving = false
     }
+  }
+
+  private var exportDetails: String {
+    var details = [
+      "\(Int(export.outputSize.width)) × \(Int(export.outputSize.height)) px",
+      formatTitle,
+    ]
+    if let fileSizeDescription {
+      details.append(fileSizeDescription)
+    }
+    return details.joined(separator: " · ")
+  }
+
+  private var fileSizeDescription: String? {
+    guard
+      let resourceValues = try? export.fileURL.resourceValues(forKeys: [.fileSizeKey]),
+      let fileSize = resourceValues.fileSize
+    else { return nil }
+    return ByteCountFormatter.string(fromByteCount: Int64(fileSize), countStyle: .file)
+  }
+
+  private func completePhotoExportChoice() {
+    guard let mode = pendingPhotoLibraryExportMode else { return }
+    pendingPhotoLibraryExportMode = nil
+    saveToPhotos(mode: mode)
   }
 
   private func shareExport() {
@@ -113,9 +161,123 @@ struct ExportPreviewView: View {
   }
 }
 
+struct ExistingPhotoExportChoiceView: View {
+  let assetIdentifier: String
+  let onSelect: (PhotoLibraryExportMode) -> Void
+  let onCancel: () -> Void
+
+  @State private var previewImage: UIImage?
+  @State private var exportedAt: Date?
+  @State private var isLoading = true
+  @State private var canReplace = false
+  @State private var loadMessage: String?
+
+  var body: some View {
+    NavigationStack {
+      VStack(spacing: 14) {
+        Group {
+          if let previewImage {
+            Image(uiImage: previewImage)
+              .resizable()
+              .scaledToFit()
+          } else if isLoading {
+            ProgressView("Loading previous export…")
+          } else {
+            ContentUnavailableView(
+              "Preview Unavailable",
+              systemImage: "photo.badge.exclamationmark",
+              description: Text(loadMessage ?? "The previous photo could not be loaded.")
+            )
+          }
+        }
+        .frame(maxWidth: .infinity, minHeight: 130, maxHeight: 170)
+        .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 14))
+        .clipShape(RoundedRectangle(cornerRadius: 14))
+
+        if let exportedAt {
+          Text(
+            "Previously exported "
+              + exportedAt.formatted(date: .abbreviated, time: .shortened)
+          )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+
+        Button("Replace Existing Photo") {
+          onSelect(.replaceExisting)
+        }
+        .buttonStyle(.borderedProminent)
+        .controlSize(.large)
+        .frame(maxWidth: .infinity)
+        .disabled(!canReplace)
+
+        Button("Create New Photo") {
+          onSelect(.createNew)
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.large)
+        .frame(maxWidth: .infinity)
+      }
+      .padding(16)
+      .navigationTitle("Photo Already Exported")
+      .navigationBarTitleDisplayMode(.inline)
+      .toolbar {
+        ToolbarItem(placement: .cancellationAction) {
+          Button("Cancel", action: onCancel)
+        }
+      }
+      .task {
+        await loadExistingPhoto()
+      }
+    }
+  }
+
+  private func loadExistingPhoto() async {
+    let status = await PHPhotoLibrary.requestAuthorization(for: .readWrite)
+    guard status == .authorized || status == .limited else {
+      isLoading = false
+      loadMessage = "Allow Photo Library access to preview or replace the previous export."
+      return
+    }
+
+    guard let asset = PHAsset.fetchAssets(withLocalIdentifiers: [assetIdentifier], options: nil)
+      .firstObject
+    else {
+      isLoading = false
+      loadMessage = "The previous export may have been deleted. Create a new photo to continue."
+      return
+    }
+
+    exportedAt = asset.creationDate
+    canReplace = true
+    previewImage = await requestPreview(for: asset)
+    isLoading = false
+    if previewImage == nil {
+      loadMessage = "The photo exists, but its preview could not be loaded."
+    }
+  }
+
+  private func requestPreview(for asset: PHAsset) async -> UIImage? {
+    await withCheckedContinuation { continuation in
+      let options = PHImageRequestOptions()
+      options.deliveryMode = .highQualityFormat
+      options.resizeMode = .fast
+      options.isNetworkAccessAllowed = true
+      PHImageManager.default().requestImage(
+        for: asset,
+        targetSize: CGSize(width: 900, height: 600),
+        contentMode: .aspectFit,
+        options: options
+      ) { image, _ in
+        continuation.resume(returning: image)
+      }
+    }
+  }
+}
+
 struct OriginalPhotoViewer: View {
   let photo: CollagePhoto
-  let originalURL: URL
+  let loadOriginal: () async -> UIImage?
   let cropConfiguration: CollagePhotoCropConfiguration
   let onSelectFocus: (CGPoint) -> Void
   let onAdjustCropZoom: (Double) -> Void
@@ -129,13 +291,13 @@ struct OriginalPhotoViewer: View {
 
   init(
     photo: CollagePhoto,
-    originalURL: URL,
+    loadOriginal: @escaping () async -> UIImage?,
     cropConfiguration: CollagePhotoCropConfiguration,
     onSelectFocus: @escaping (CGPoint) -> Void,
     onAdjustCropZoom: @escaping (Double) -> Void
   ) {
     self.photo = photo
-    self.originalURL = originalURL
+    self.loadOriginal = loadOriginal
     self.cropConfiguration = cropConfiguration
     self.onSelectFocus = onSelectFocus
     self.onAdjustCropZoom = onAdjustCropZoom
@@ -162,7 +324,9 @@ struct OriginalPhotoViewer: View {
           ContentUnavailableView(
             "Photo Unavailable",
             systemImage: "photo.badge.exclamationmark",
-            description: Text("The original photo file could not be loaded.")
+            description: Text(
+              "The saved copy and its referenced original in Photos could not be loaded."
+            )
           )
         } else {
           VStack(spacing: 12) {
@@ -228,14 +392,8 @@ struct OriginalPhotoViewer: View {
     }
     .preferredColorScheme(.dark)
     .interactiveDismissDisabled(true)
-    .task(id: originalURL) {
-      let path = originalURL.path
-      image = await Task.detached(priority: .userInitiated) {
-        autoreleasepool {
-          guard let source = UIImage(contentsOfFile: path) else { return nil }
-          return source.preparingForDisplay() ?? source
-        }
-      }.value
+    .task(id: photo.id) {
+      image = await loadOriginal()
       didFailToLoad = image == nil
     }
   }
@@ -275,6 +433,7 @@ private struct ZoomableImageViewer: View {
   @State private var settledOffset: CGSize = .zero
   @State private var cropDragStart: CGPoint?
   @State private var isAdjustingCrop = false
+  @State private var isMagnifying = false
 
   var body: some View {
     GeometryReader { proxy in
@@ -298,17 +457,20 @@ private struct ZoomableImageViewer: View {
         .scaleEffect(scale)
         .offset(offset)
       }
+      .clipped()
       .coordinateSpace(name: "original-photo-viewer")
       .contentShape(Rectangle())
-      .gesture(dragGesture)
-      .simultaneousGesture(magnificationGesture)
+      .gesture(dragGesture(in: proxy.size))
+      .simultaneousGesture(magnificationGesture(in: proxy.size))
       .simultaneousGesture(
-        doubleTapGesture.exclusively(before: focusSelectionGesture(in: proxy.size))
+        doubleTapGesture(in: proxy.size).exclusively(
+          before: focusSelectionGesture(in: proxy.size)
+        )
       )
       .overlay(alignment: .bottom) {
         HStack(spacing: 18) {
           Button {
-            setScale(scale / 1.5)
+            setScale(scale / 1.5, in: proxy.size)
           } label: {
             Image(systemName: "minus.magnifyingglass")
           }
@@ -317,7 +479,7 @@ private struct ZoomableImageViewer: View {
             .font(.caption.monospacedDigit())
             .frame(minWidth: 44)
           Button {
-            setScale(scale * 1.5)
+            setScale(scale * 1.5, in: proxy.size)
           } label: {
             Image(systemName: "plus.magnifyingglass")
           }
@@ -450,13 +612,13 @@ private struct ZoomableImageViewer: View {
     }
   }
 
-  private var doubleTapGesture: some Gesture {
+  private func doubleTapGesture(in viewportSize: CGSize) -> some Gesture {
     SpatialTapGesture(count: 2)
-      .onEnded { _ in
+      .onEnded { value in
         if scale > 1.01 {
           resetView()
         } else {
-          setScale(2)
+          setScale(2, around: value.location, in: viewportSize)
         }
       }
   }
@@ -468,16 +630,20 @@ private struct ZoomableImageViewer: View {
       }
   }
 
-  private var dragGesture: some Gesture {
+  private func dragGesture(in viewportSize: CGSize) -> some Gesture {
     DragGesture(minimumDistance: 2)
       .onChanged { value in
-        guard !isAdjustingCrop else { return }
-        offset = CGSize(
+        guard !isAdjustingCrop, !isMagnifying, scale > 1.01 else { return }
+        let proposedOffset = CGSize(
           width: settledOffset.width + value.translation.width,
           height: settledOffset.height + value.translation.height
         )
+        offset = constrainedOffset(proposedOffset, at: scale, in: viewportSize)
       }
-      .onEnded { _ in settledOffset = offset }
+      .onEnded { _ in
+        offset = constrainedOffset(offset, at: scale, in: viewportSize)
+        settledOffset = offset
+      }
   }
 
   private func cropDragGesture(normalizedCrop: CGRect, imageRect: CGRect) -> some Gesture {
@@ -507,24 +673,83 @@ private struct ZoomableImageViewer: View {
       }
   }
 
-  private var magnificationGesture: some Gesture {
-    MagnificationGesture()
-      .onChanged { value in scale = min(maximumScale, max(1, settledScale * value)) }
+  private func magnificationGesture(in viewportSize: CGSize) -> some Gesture {
+    MagnifyGesture()
+      .onChanged { value in
+        isMagnifying = true
+        let newScale = min(maximumScale, max(1, settledScale * value.magnification))
+        let proposedOffset = offsetKeepingAnchorFixed(
+          value.startLocation,
+          fromScale: settledScale,
+          toScale: newScale,
+          startingOffset: settledOffset,
+          viewportSize: viewportSize
+        )
+        scale = newScale
+        offset = constrainedOffset(proposedOffset, at: newScale, in: viewportSize)
+      }
       .onEnded { _ in
+        isMagnifying = false
         settledScale = scale
-        if scale <= 1.01 { resetView() }
+        if scale <= 1.01 {
+          resetView()
+        } else {
+          offset = constrainedOffset(offset, at: scale, in: viewportSize)
+          settledOffset = offset
+        }
       }
   }
 
-  private func setScale(_ newScale: CGFloat) {
+  private func setScale(
+    _ requestedScale: CGFloat,
+    around anchor: CGPoint? = nil,
+    in viewportSize: CGSize
+  ) {
+    let newScale = min(maximumScale, max(1, requestedScale))
+    let zoomAnchor = anchor ?? CGPoint(x: viewportSize.width / 2, y: viewportSize.height / 2)
+    let proposedOffset = offsetKeepingAnchorFixed(
+      zoomAnchor,
+      fromScale: scale,
+      toScale: newScale,
+      startingOffset: offset,
+      viewportSize: viewportSize
+    )
+    let newOffset = constrainedOffset(proposedOffset, at: newScale, in: viewportSize)
     withAnimation(.easeInOut(duration: 0.2)) {
-      scale = min(maximumScale, max(1, newScale))
-      settledScale = scale
-      if scale <= 1.01 {
-        offset = .zero
-        settledOffset = .zero
-      }
+      scale = newScale
+      settledScale = newScale
+      offset = newOffset
+      settledOffset = newOffset
     }
+  }
+
+  private func offsetKeepingAnchorFixed(
+    _ anchor: CGPoint,
+    fromScale: CGFloat,
+    toScale: CGFloat,
+    startingOffset: CGSize,
+    viewportSize: CGSize
+  ) -> CGSize {
+    let center = CGPoint(x: viewportSize.width / 2, y: viewportSize.height / 2)
+    let ratio = toScale / max(fromScale, 0.001)
+    return CGSize(
+      width: anchor.x - center.x - (anchor.x - center.x - startingOffset.width) * ratio,
+      height: anchor.y - center.y - (anchor.y - center.y - startingOffset.height) * ratio
+    )
+  }
+
+  private func constrainedOffset(
+    _ proposedOffset: CGSize,
+    at scale: CGFloat,
+    in viewportSize: CGSize
+  ) -> CGSize {
+    let imageRect = fittedImageRect(in: viewportSize)
+    let maximumX = max(0, (imageRect.width * scale - viewportSize.width) / 2)
+    let maximumY = max(0, (imageRect.height * scale - viewportSize.height) / 2)
+    return CGSize(
+      width: min(maximumX, max(-maximumX, proposedOffset.width)),
+      height: min(maximumY, max(-maximumY, proposedOffset.height))
+    )
   }
 
   private func resetView() {

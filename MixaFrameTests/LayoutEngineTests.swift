@@ -6,6 +6,39 @@ import XCTest
 @testable import MixaFrame
 
 final class LayoutEngineTests: XCTestCase {
+  func testExportedPhotoLibraryIdentifierPersistsWithCollage() throws {
+    var task = CollageTask.new(projectID: UUID())
+    task.exportedPhotoLibraryAssetIdentifier = "asset-local-identifier"
+
+    let data = try JSONEncoder().encode(task)
+    let decoded = try JSONDecoder().decode(CollageTask.self, from: data)
+
+    XCTAssertEqual(decoded.exportedPhotoLibraryAssetIdentifier, "asset-local-identifier")
+  }
+
+  func testExportPreferencesPersistFormatAndQuality() throws {
+    let suiteName = "ExportPreferencesTests.\(UUID().uuidString)"
+    let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+    defer { defaults.removePersistentDomain(forName: suiteName) }
+
+    MixaFrameExportPreferences.save(outputFormat: .heif, defaults: defaults)
+    MixaFrameExportPreferences.save(quality: .best, defaults: defaults)
+    MixaFrameExportPreferences.save(outputMaxDimension: 8192, defaults: defaults)
+    MixaFrameExportPreferences.save(background: .dark, defaults: defaults)
+    MixaFrameExportPreferences.save(spacing: 24, defaults: defaults)
+    MixaFrameExportPreferences.save(canvasCornerRadius: 18, defaults: defaults)
+
+    var task = CollageTask.new(projectID: UUID())
+    MixaFrameExportPreferences.apply(to: &task, defaults: defaults)
+
+    XCTAssertEqual(task.outputFormat, .heif)
+    XCTAssertEqual(task.quality, .best)
+    XCTAssertEqual(task.outputMaxDimension, 8192)
+    XCTAssertEqual(task.background, .dark)
+    XCTAssertEqual(task.spacing, 24)
+    XCTAssertEqual(task.canvasCornerRadius, 18)
+  }
+
   func testFourKSquareOutput() {
     var task = CollageTask.new(projectID: UUID())
     task.canvas = .square
@@ -328,7 +361,7 @@ final class LayoutEngineTests: XCTestCase {
     let store = AppStore(rootDirectory: directory)
     let projectID = store.createProject(name: "Thumbnail Persistence")
     var photos: [CollagePhoto] = []
-    for color in [UIColor.systemOrange, UIColor.systemBlue] {
+    for (index, color) in [UIColor.systemOrange, UIColor.systemBlue].enumerated() {
       let image = UIGraphicsImageRenderer(size: CGSize(width: 320, height: 220)).image {
         context in
         color.setFill()
@@ -336,12 +369,14 @@ final class LayoutEngineTests: XCTestCase {
       }
       photos.append(
         try await store.importPhotoData(
-          try XCTUnwrap(image.jpegData(compressionQuality: 0.9))))
+          try XCTUnwrap(image.jpegData(compressionQuality: 0.9)),
+          photoLibraryAssetIdentifier: "photo-library-asset-\(index)"
+        ))
     }
 
     var task = CollageTask.new(projectID: projectID)
     task.photos = photos
-    store.saveTask(task)
+    task = try XCTUnwrap(store.saveTask(task))
     let thumbnailURL = store.collageThumbnailURL(for: task)
     XCTAssertTrue(FileManager.default.fileExists(atPath: thumbnailURL.path))
     XCTAssertNotNil(store.collageThumbnailImage(for: task))
@@ -349,6 +384,10 @@ final class LayoutEngineTests: XCTestCase {
     let reloadedStore = AppStore(rootDirectory: directory)
     let reloadedTask = try XCTUnwrap(reloadedStore.project(id: projectID)?.tasks.first)
     XCTAssertNotNil(reloadedTask.savedLayoutSnapshot)
+    XCTAssertEqual(
+      reloadedTask.photos.compactMap(\.photoLibraryAssetIdentifier),
+      ["photo-library-asset-0", "photo-library-asset-1"]
+    )
     reloadedStore.preloadPersistedThumbnails(for: reloadedTask.photos)
     XCTAssertTrue(reloadedTask.photos.allSatisfy { reloadedStore.thumbnailImage(for: $0) != nil })
     XCTAssertTrue(reloadedTask.photos.allSatisfy { reloadedStore.previewImage(for: $0) != nil })
@@ -360,6 +399,32 @@ final class LayoutEngineTests: XCTestCase {
     )
     XCTAssertGreaterThan(reloadedThumbnail.size.width, 0)
     XCTAssertGreaterThan(reloadedThumbnail.size.height, 0)
+  }
+
+  @MainActor
+  func testStoreReloadPreservesImportedAssetsUntilTaskCommit() async throws {
+    let directory = FileManager.default.temporaryDirectory
+      .appendingPathComponent(
+        "MixaFramePendingAssetTests-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    let store = AppStore(rootDirectory: directory)
+    let image = UIGraphicsImageRenderer(size: CGSize(width: 280, height: 180)).image {
+      context in
+      UIColor.systemPurple.setFill()
+      context.fill(CGRect(x: 0, y: 0, width: 280, height: 180))
+    }
+    let photo = try await store.importPhotoData(
+      try XCTUnwrap(image.jpegData(compressionQuality: 0.9)))
+
+    XCTAssertTrue(FileManager.default.fileExists(atPath: store.imageURL(for: photo).path))
+    XCTAssertTrue(FileManager.default.fileExists(atPath: store.previewURL(for: photo).path))
+    XCTAssertTrue(FileManager.default.fileExists(atPath: store.thumbnailURL(for: photo).path))
+
+    let reloadedStore = AppStore(rootDirectory: directory)
+    XCTAssertTrue(FileManager.default.fileExists(atPath: reloadedStore.imageURL(for: photo).path))
+    XCTAssertNotNil(reloadedStore.previewImage(for: photo))
+    XCTAssertNotNil(reloadedStore.thumbnailImage(for: photo))
   }
 
   func testGridProducesAFrameForEveryPhoto() {

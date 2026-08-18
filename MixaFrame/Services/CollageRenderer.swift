@@ -2,6 +2,7 @@ import ImageIO
 import Photos
 import SDWebImageWebPCoder
 import UIKit
+import UniformTypeIdentifiers
 
 struct PreparedCollageExport: Identifiable {
   let id = UUID()
@@ -66,7 +67,7 @@ enum CollageRenderer {
 
     let format = UIGraphicsImageRendererFormat()
     format.scale = 1
-    format.opaque = task.outputFormat == .jpeg
+    format.opaque = !task.outputFormat.supportsTransparency
     let renderer = UIGraphicsImageRenderer(size: outputSize, format: format)
     let layoutFrames = LayoutEngine.layoutFrames(for: task, in: outputSize)
     let cgImages = try task.photos.map { photo -> CGImage in
@@ -100,7 +101,7 @@ enum CollageRenderer {
     context: UIGraphicsImageRendererContext,
     includesWatermark: Bool
   ) {
-    if task.outputFormat == .jpeg {
+    if !task.outputFormat.supportsTransparency {
       UIColor.white.setFill()
       context.fill(canvasRect)
     } else {
@@ -221,7 +222,7 @@ enum CollageRenderer {
     }
   }
 
-  static func saveToPhotoLibrary(fileURL: URL) async throws {
+  static func saveToPhotoLibrary(fileURL: URL) async throws -> String {
     let status = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
     guard status == .authorized || status == .limited else {
       throw NSError(
@@ -233,12 +234,93 @@ enum CollageRenderer {
       )
     }
 
+    var assetIdentifier: String?
     try await PHPhotoLibrary.shared().performChanges {
       let request = PHAssetCreationRequest.forAsset()
       let options = PHAssetResourceCreationOptions()
       options.originalFilename = fileURL.lastPathComponent
       request.addResource(with: .photo, fileURL: fileURL, options: options)
+      assetIdentifier = request.placeholderForCreatedAsset?.localIdentifier
     }
+    guard let assetIdentifier else {
+      throw photoLibraryError("Photos did not return an identifier for the saved collage.")
+    }
+    return assetIdentifier
+  }
+
+  static func replacePhotoLibraryAsset(
+    identifier: String,
+    with fileURL: URL,
+    format: OutputFormat
+  ) async throws {
+    let status = await PHPhotoLibrary.requestAuthorization(for: .readWrite)
+    guard status == .authorized || status == .limited else {
+      throw photoLibraryError(
+        "Full Photo Library access is required to replace an existing collage."
+      )
+    }
+
+    guard let asset = PHAsset.fetchAssets(withLocalIdentifiers: [identifier], options: nil)
+      .firstObject
+    else {
+      throw photoLibraryError(
+        "The previously exported photo is no longer available. Choose Create New Photo instead."
+      )
+    }
+
+    let input = try await contentEditingInput(for: asset)
+    let output = PHContentEditingOutput(contentEditingInput: input)
+    let renderedURL = try output.renderedContentURL(for: uniformType(for: format))
+    try? FileManager.default.removeItem(at: renderedURL)
+    try FileManager.default.copyItem(at: fileURL, to: renderedURL)
+    output.adjustmentData = PHAdjustmentData(
+      formatIdentifier: "com.infiz.MixaFrame.collage",
+      formatVersion: "1.0",
+      data: Data(UUID().uuidString.utf8)
+    )
+
+    try await PHPhotoLibrary.shared().performChanges {
+      PHAssetChangeRequest(for: asset).contentEditingOutput = output
+    }
+  }
+
+  private static func contentEditingInput(for asset: PHAsset) async throws
+    -> PHContentEditingInput
+  {
+    try await withCheckedThrowingContinuation { continuation in
+      let options = PHContentEditingInputRequestOptions()
+      options.isNetworkAccessAllowed = true
+      asset.requestContentEditingInput(with: options) { input, info in
+        if let input {
+          continuation.resume(returning: input)
+        } else if let error = info[PHContentEditingInputErrorKey] as? Error {
+          continuation.resume(throwing: error)
+        } else {
+          continuation.resume(
+            throwing: photoLibraryError(
+              "Photos could not prepare the existing collage for editing."
+            )
+          )
+        }
+      }
+    }
+  }
+
+  private static func uniformType(for format: OutputFormat) -> UTType {
+    switch format {
+    case .jpeg: .jpeg
+    case .png: .png
+    case .webP: .webP
+    case .heif: .heic
+    }
+  }
+
+  private static func photoLibraryError(_ detail: String) -> NSError {
+    NSError(
+      domain: "MixaFrame.PhotoLibrary",
+      code: 1,
+      userInfo: [NSLocalizedDescriptionKey: detail]
+    )
   }
 
   private static func encodedData(for image: UIImage, format: OutputFormat, quality: OutputQuality)
@@ -266,6 +348,30 @@ enum CollageRenderer {
         throw AppError.encodingUnavailable(format.title)
       }
       return data
+    case .heif:
+      guard let cgImage = image.normalizedCGImage else {
+        throw AppError.encodingUnavailable(format.title)
+      }
+      let data = NSMutableData()
+      guard
+        let destination = CGImageDestinationCreateWithData(
+          data,
+          UTType.heic.identifier as CFString,
+          1,
+          nil
+        )
+      else {
+        throw AppError.encodingUnavailable(format.title)
+      }
+      CGImageDestinationAddImage(
+        destination,
+        cgImage,
+        [kCGImageDestinationLossyCompressionQuality: quality.compressionQuality] as CFDictionary
+      )
+      guard CGImageDestinationFinalize(destination) else {
+        throw AppError.encodingUnavailable(format.title)
+      }
+      return data as Data
     }
   }
 

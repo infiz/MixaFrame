@@ -19,6 +19,7 @@ enum PhotoImagePipeline {
   static func importPhoto(
     data: Data,
     id: UUID,
+    photoLibraryAssetIdentifier: String? = nil,
     originalURL: URL,
     previewURL: URL,
     thumbnailURL: URL
@@ -39,6 +40,7 @@ enum PhotoImagePipeline {
       let photo = CollagePhoto(
         id: id,
         fileName: originalURL.lastPathComponent,
+        photoLibraryAssetIdentifier: photoLibraryAssetIdentifier,
         pixelWidth: dimensions.width,
         pixelHeight: dimensions.height,
         focalX: detection.focusPoint.x,

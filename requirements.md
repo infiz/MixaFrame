@@ -82,7 +82,7 @@ The collage output is a single image generated from a collage task. Updating a t
 - The preview updates when the user changes the layout, image dimensions, or output resolution.
 - The user can choose either a white or dark collage background, and the preview and exported image update to match.
 - In Layout settings, the user can adjust the outer collage canvas corners from square (0%) through fully rounded (50%). This setting does not round individual photo frames.
-- Rounded canvas corners are transparent in PNG and WebP exports. JPEG exports flatten the area outside the rounded canvas onto white because JPEG does not support transparency.
+- Rounded canvas corners are transparent in PNG and WebP exports. JPEG and HEIF exports flatten the area outside the rounded canvas onto white for broad compatibility.
 - The layout browser shows live miniature previews and compact family filters without displacing the primary collage preview.
 - The layout browser scores templates for the current photos and ranks stronger crop-retention options first. Featured always shows every distinct one-, two-, and three-main composition so the user can choose emphasis directly; other families hide templates that crop materially more image area than the best options. A filtered layout normally qualifies only when it retains at least 68% of source-photo area on average and at least 42% for every individual photo; when a canvas/photo combination makes those levels geometrically impossible, only layouts within 10 percentage points of the best achievable fit are offered.
 - When photos are added or removed, the app preserves the corresponding layout variant for the new photo count when one exists and otherwise selects a compatible fallback.
@@ -137,7 +137,7 @@ The collage output is a single image generated from a collage task. Updating a t
 - Resolution choices must display the resulting pixel dimensions before export.
 - Changing the output resolution must preserve the selected layout and composition.
 - The user can choose the output image format before exporting the collage.
-- Supported output formats include JPEG, PNG, and WebP. Additional formats may be added later.
+- Supported output formats include JPEG, PNG, WebP, and Apple HEIF (HEIC files). Additional formats may be added later.
 - JPEG is the default output format.
 - The format selector must describe important differences that affect the output, such as file size, image quality, and transparency support.
 - The user can select one of three output-quality presets:
@@ -232,7 +232,7 @@ The MVP is complete when a user can:
 7. Replace the automatically selected layout with another available layout.
 8. Change the collage to another standard image dimension.
 9. Select an output resolution, with 4K used by default and 8K (8192 pixels) available as the maximum.
-10. Choose JPEG, PNG, or WebP as the output format.
+10. Choose JPEG, PNG, WebP, or Apple HEIF as the output format.
 11. Choose Space Saver, Balanced, or Best Quality and understand the corresponding quality/file-size tradeoff.
 12. Save the task, close the app, and later reopen the task with its photos, ordering, layout, dimensions, resolution, output format, output quality, and crop adjustments intact.
 13. Update and regenerate the saved collage.
@@ -262,7 +262,7 @@ The MVP is complete when a user can:
 ## 10. Open Questions
 
 - Should additional canvas aspect ratios be supported beyond square (1:1), portrait (4:5), landscape (3:2), and story (9:16)?
-- Which additional output formats, beyond JPEG, PNG, and WebP, should the MVP support?
+- Which additional output formats, beyond JPEG, PNG, WebP, and Apple HEIF, should the MVP support?
 - What format-specific encoding values should Space Saver, Balanced, and Best Quality use for JPEG and WebP?
 - Should borders, rounded corners, text, stickers, or filters be included in the MVP?
 - If an original photo is removed from the photo library, should the app retain its own copy or ask the user to replace it?
