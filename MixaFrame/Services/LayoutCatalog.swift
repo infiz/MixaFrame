@@ -2,6 +2,7 @@ import CoreGraphics
 import Foundation
 
 enum LayoutFamily: String, CaseIterable, Identifiable {
+  case smart
   case grid
   case hero
   case editorial
@@ -11,18 +12,23 @@ enum LayoutFamily: String, CaseIterable, Identifiable {
 
   var id: String { rawValue }
 
-  static let browserCases: [LayoutFamily] = [.grid, .hero, .mosaic, .slanted]
+  static let browserCases: [LayoutFamily] = [.smart, .grid, .hero, .mosaic, .slanted]
 
   var browserFamily: LayoutFamily {
     self == .editorial ? .hero : self
   }
 
   var title: String {
-    self == .hero ? "Featured" : rawValue.capitalized
+    switch self {
+    case .smart: "Smart Layout"
+    case .hero: "Featured"
+    default: rawValue.capitalized
+    }
   }
 
   var symbol: String {
     switch self {
+    case .smart: "wand.and.stars"
     case .grid: "square.grid.2x2"
     case .hero: "rectangle.inset.filled"
     case .editorial: "newspaper"
@@ -61,7 +67,6 @@ enum LastRowAlignment: Hashable {
 }
 
 enum LayoutRecipe: Hashable {
-  case smartGrid
   case grid(columns: Int, lastRow: LastRowAlignment)
   case adaptiveGrid(rowCounts: [Int])
   case hero(edge: LayoutEdge, fraction: CGFloat)
@@ -208,10 +213,6 @@ enum LayoutCatalog {
       replacementKey = "hero-top-58"
     } else if key.hasPrefix("bands-column-") {
       replacementKey = "hero-left-58"
-    } else if key == "natural-vertical" || key == "equal-rows" || key == "equal-columns"
-      || key.hasPrefix("strip-")
-    {
-      replacementKey = "smart-grid"
     } else {
       replacementKey = nil
     }
@@ -235,13 +236,13 @@ enum LayoutCatalog {
       let legacy: CollageLayout = canvasRatio >= 1 ? .columns : .rows
       return layouts.first(where: { $0.legacyLayout == legacy }) ?? layouts[0]
     }
-    return layouts.first(where: { $0.legacyLayout == .smartGrid }) ?? layouts[0]
+    return layouts.first(where: { $0.family == .grid }) ?? layouts[0]
   }
 
   private static var singlePhotoTemplates: [CollageLayoutTemplate] {
     [
       template(
-        1, "full-bleed", "Full Bleed", .grid, .grid(columns: 1, lastRow: .stretch), .smartGrid),
+        1, "full-bleed", "Full Bleed", .grid, .grid(columns: 1, lastRow: .stretch)),
       template(
         1, "gallery-matte", "Gallery Matte", .grid,
         .inset(scale: 0.84, rotation: 0, cornerRadius: 0)),
@@ -250,8 +251,6 @@ enum LayoutCatalog {
 
   private static func legacyTemplates(photoCount count: Int) -> [CollageLayoutTemplate] {
     return [
-      template(
-        count, "smart-grid", "Smart Grid", .grid, .smartGrid, .smartGrid),
       template(
         count, "hero-top-58", "Hero Top", .hero, .hero(edge: .top, fraction: 0.58), .featuredTop),
       template(
@@ -273,6 +272,9 @@ enum LayoutCatalog {
     -> [CollageLayoutTemplate]
   {
     switch family {
+    case .smart:
+      return []
+
     case .grid:
       return gridRowPatterns(photoCount: count).map { rowCounts in
         let key = rowCounts.map(String.init).joined(separator: "-")

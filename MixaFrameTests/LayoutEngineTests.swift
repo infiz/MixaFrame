@@ -104,9 +104,9 @@ final class LayoutEngineTests: XCTestCase {
     XCTAssertEqual(task.backgroundHex, "111111")
   }
 
-  func testDefaultCollageTitleCanBeReplacedWithoutClearingItFirst() {
+  func testNewCollageTitleStartsEmptyAndCanBeAdded() {
     var task = CollageTask.new(projectID: UUID())
-    XCTAssertEqual(task.name, CollageTask.defaultName)
+    XCTAssertEqual(task.name, "")
     XCTAssertEqual(task.titleForEditing, "")
 
     task.name = "Summer Trip"
@@ -448,7 +448,10 @@ final class LayoutEngineTests: XCTestCase {
     }
     task.layoutID = try XCTUnwrap(
       LayoutCatalog.templates(photoCount: 4).first(where: {
-        $0.legacyLayout == .smartGrid
+        if case .adaptiveGrid(let rowCounts) = $0.recipe {
+          return rowCounts == [2, 2]
+        }
+        return false
       })
     ).id
     task.spacing = 0
@@ -758,42 +761,7 @@ final class LayoutEngineTests: XCTestCase {
     )
   }
 
-  func testSmartGridUsesThreeCompleteRowsForTwelveLandscapePhotos() throws {
-    var task = CollageTask.new(projectID: UUID())
-    task.canvas = .landscape
-    task.photos = (0..<12).map { index in
-      CollagePhoto(fileName: "landscape-\(index)", pixelWidth: 1500, pixelHeight: 1000)
-    }
-    task.layoutID = try XCTUnwrap(
-      LayoutCatalog.templates(photoCount: 12).first(where: { $0.legacyLayout == .smartGrid })
-    ).id
-
-    let frames = LayoutEngine.frames(for: task, in: LayoutEngine.outputSize(for: task))
-    let rowCounts = Dictionary(grouping: frames, by: \.minY).values.map(\.count).sorted()
-
-    XCTAssertEqual(rowCounts, [4, 4, 4])
-  }
-
-  func testSmartGridAdaptsToSourcePhotoAspectRatios() throws {
-    func rowCounts(pixelWidth: Int, pixelHeight: Int) throws -> [Int] {
-      var task = CollageTask.new(projectID: UUID())
-      task.canvas = .landscape
-      task.photos = (0..<12).map { index in
-        CollagePhoto(
-          fileName: "photo-\(index)", pixelWidth: pixelWidth, pixelHeight: pixelHeight)
-      }
-      task.layoutID = try XCTUnwrap(
-        LayoutCatalog.templates(photoCount: 12).first(where: { $0.legacyLayout == .smartGrid })
-      ).id
-      let frames = LayoutEngine.frames(for: task, in: LayoutEngine.outputSize(for: task))
-      return Dictionary(grouping: frames, by: \.minY).values.map(\.count).sorted()
-    }
-
-    XCTAssertEqual(try rowCounts(pixelWidth: 1500, pixelHeight: 1000), [4, 4, 4])
-    XCTAssertEqual(try rowCounts(pixelWidth: 1000, pixelHeight: 1500), [6, 6])
-  }
-
-  func testSmartGridThumbnailUsesTheSameGeometryAsTheCollage() throws {
+  func testGridThumbnailUsesTheSameGeometryAsTheCollage() throws {
     var task = CollageTask.new(projectID: UUID())
     task.canvas = .landscape
     task.photos = (0..<12).map { index in
@@ -804,7 +772,7 @@ final class LayoutEngineTests: XCTestCase {
       )
     }
     let template = try XCTUnwrap(
-      LayoutCatalog.templates(photoCount: 12).first(where: { $0.legacyLayout == .smartGrid })
+      LayoutCatalog.templates(photoCount: 12).first(where: { $0.family == .grid })
     )
     task.layoutID = template.id
     task.layoutRowWeights = [1.2, 0.8, 1]
@@ -824,7 +792,7 @@ final class LayoutEngineTests: XCTestCase {
     XCTAssertEqual(thumbnailFrames, collageFrames)
   }
 
-  func testSmartGridFillsUnevenLastRowAndAssignsBestFitPhoto() throws {
+  func testManualPhotoOrderPreservesPickerOrder() throws {
     var task = CollageTask.new(projectID: UUID())
     task.canvas = .portrait
     task.photos = [
@@ -835,39 +803,12 @@ final class LayoutEngineTests: XCTestCase {
       CollagePhoto(fileName: "landscape-4", pixelWidth: 1500, pixelHeight: 1000),
     ]
     task.layoutID = try XCTUnwrap(
-      LayoutCatalog.templates(photoCount: 5).first(where: { $0.legacyLayout == .smartGrid })
-    ).id
-
-    let size = LayoutEngine.outputSize(for: task)
-    let frames = LayoutEngine.frames(for: task, in: size)
-    let rowCounts = Dictionary(grouping: frames, by: \.minY).values.map(\.count).sorted()
-    let visualOrder = LayoutEngine.photoIndicesInVisualOrder(for: task, in: size)
-
-    XCTAssertEqual(rowCounts, [1, 2, 2])
-    XCTAssertEqual(frames[0].width, size.width, accuracy: 0.5)
-    XCTAssertEqual(visualOrder.last, 0)
-  }
-
-  func testManualPhotoOrderOverridesSmartGridBestFitAssignment() throws {
-    var task = CollageTask.new(projectID: UUID())
-    task.canvas = .portrait
-    task.photos = [
-      CollagePhoto(fileName: "widest", pixelWidth: 2000, pixelHeight: 1000),
-      CollagePhoto(fileName: "landscape-1", pixelWidth: 1500, pixelHeight: 1000),
-      CollagePhoto(fileName: "landscape-2", pixelWidth: 1500, pixelHeight: 1000),
-      CollagePhoto(fileName: "landscape-3", pixelWidth: 1500, pixelHeight: 1000),
-      CollagePhoto(fileName: "landscape-4", pixelWidth: 1500, pixelHeight: 1000),
-    ]
-    task.layoutID = try XCTUnwrap(
-      LayoutCatalog.templates(photoCount: 5).first(where: { $0.legacyLayout == .smartGrid })
+      LayoutCatalog.templates(photoCount: 5).first(where: { $0.family == .grid })
     ).id
     task.isPhotoOrderManuallyAdjusted = true
 
     let size = LayoutEngine.outputSize(for: task)
-    let frames = LayoutEngine.frames(for: task, in: size)
 
-    XCTAssertLessThan(frames[0].width, size.width)
-    XCTAssertEqual(frames[4].width, size.width, accuracy: 0.5)
     XCTAssertEqual(LayoutEngine.photoIndicesInVisualOrder(for: task, in: size), Array(0..<5))
   }
 
@@ -886,9 +827,6 @@ final class LayoutEngineTests: XCTestCase {
         focusSource: .manual, zoom: 2
       ),
     ]
-    task.layoutID = try XCTUnwrap(
-      LayoutCatalog.templates(photoCount: 2).first(where: { $0.legacyLayout == .smartGrid })
-    ).id
     task.isPhotoOrderManuallyAdjusted = true
 
     task.resetPhotosForAutomaticFit()
@@ -927,7 +865,7 @@ final class LayoutEngineTests: XCTestCase {
       task.canvas = .portrait
       task.photos = photos
       task.layoutID = try XCTUnwrap(
-        LayoutCatalog.templates(photoCount: 5).first(where: { $0.legacyLayout == .smartGrid })
+        LayoutCatalog.templates(photoCount: 5).first(where: { $0.family == .grid })
       ).id
       let size = LayoutEngine.outputSize(for: task)
       let frames = LayoutEngine.frames(for: task, in: size)
@@ -962,27 +900,6 @@ final class LayoutEngineTests: XCTestCase {
 
     XCTAssertEqual(frames[2].minY, 0, accuracy: 0.5)
     XCTAssertEqual(frames[2].width, size.width, accuracy: 0.5)
-  }
-
-  func testStripLayoutsAreRemovedAndLegacyStripTasksUseSmartGrid() throws {
-    var task = CollageTask.new(projectID: UUID())
-    task.layoutID = "n2-natural-vertical"
-    task.layout = .verticalStrip
-    task.photos = [
-      CollagePhoto(fileName: "one", pixelWidth: 1200, pixelHeight: 800),
-      CollagePhoto(fileName: "two", pixelWidth: 800, pixelHeight: 1200),
-    ]
-
-    XCTAssertFalse(LayoutFamily.browserCases.contains(where: { $0.rawValue == "strip" }))
-    XCTAssertFalse(
-      (2...12).flatMap { LayoutCatalog.templates(photoCount: $0) }.contains(where: {
-        switch $0.recipe {
-        case .strip, .naturalVerticalStrip: true
-        default: false
-        }
-      })
-    )
-    XCTAssertEqual(LayoutCatalog.selectedTemplate(for: task).id, "n2-smart-grid")
   }
 
   func testGridUsesPhotoCountSpecificFullWidthRowPatterns() throws {
@@ -1077,20 +994,49 @@ final class LayoutEngineTests: XCTestCase {
     XCTAssertEqual(recommendation.family, .grid)
   }
 
-  func testSmartGridIsTheFirstOfferedGridOption() throws {
+  func testFittingLayoutSamplesStayStableWhenSelectionChanges() throws {
     var task = CollageTask.new(projectID: UUID())
-    task.canvas = .landscape
-    task.photos = (0..<8).map {
-      CollagePhoto(fileName: "photo-\($0)", pixelWidth: 1500, pixelHeight: 1000)
+    task.canvas = .square
+    task.photos = (0..<6).map {
+      CollagePhoto(fileName: "landscape-\($0)", pixelWidth: 1500, pixelHeight: 1000)
+    }
+    let gridTemplates = LayoutEngine.layoutSamples(family: .grid, photoCount: 6)
+    task.layoutID = try XCTUnwrap(gridTemplates.first).id
+    let expectedIDs = LayoutEngine.fittingLayoutSamples(family: .grid, task: task).map(\.id)
+    XCTAssertFalse(expectedIDs.isEmpty)
+
+    let snapshotFrames = (0..<task.photos.count).map { index in
+      SavedLayoutFrame(
+        rect: NormalizedLayoutFrame(
+          x: Double(index) / Double(task.photos.count), y: 0,
+          width: 1 / Double(task.photos.count), height: 1
+        ),
+        clipPolygon: nil,
+        cornerRadiusFraction: 0,
+        rotationDegrees: 0,
+        zIndex: 0,
+        usesAspectFit: false
+      )
     }
 
-    let gridLayouts = LayoutEngine.fittingLayoutSamples(
-      family: .grid,
-      task: task,
-      mainPhotoCount: 1
-    )
+    for template in gridTemplates {
+      var selectedTask = task
+      selectedTask.layoutID = template.id
+      selectedTask.savedLayoutSnapshot = SavedLayoutSnapshot(
+        sourceLayoutID: template.id,
+        sourceLayoutTitle: template.title,
+        sourceLayoutFamily: template.family.rawValue,
+        photoCount: selectedTask.photos.count,
+        outputAspectRatio: 1,
+        frames: snapshotFrames
+      )
 
-    XCTAssertEqual(try XCTUnwrap(gridLayouts.first).legacyLayout, .smartGrid)
+      XCTAssertEqual(
+        LayoutEngine.fittingLayoutSamples(family: .grid, task: selectedTask).map(\.id),
+        expectedIDs,
+        "Selecting \(template.title) should not change the offered Grid layouts"
+      )
+    }
   }
 
   func testAutomaticRecommendationOptimizesCanvasAndLayoutTogether() {
@@ -1107,6 +1053,121 @@ final class LayoutEngineTests: XCTestCase {
     XCTAssertNotEqual(recommendation.canvas, .landscape)
     XCTAssertGreaterThan(fit.averageVisibleFraction, 0.9)
     XCTAssertGreaterThan(fit.minimumVisibleFraction, 0.9)
+  }
+
+  func testSmartLayoutCategorySuggestsAtLeastThreeDistinctLayouts() {
+    var task = CollageTask.new(projectID: UUID())
+    task.canvas = .square
+    task.photos = [
+      CollagePhoto(
+        fileName: "wide-left", pixelWidth: 2200, pixelHeight: 1200,
+        focalX: 0.2, focalY: 0.5,
+        detectedFocusArea: PhotoFocusArea(CGRect(x: 0.05, y: 0.25, width: 0.3, height: 0.5))
+      ),
+      CollagePhoto(
+        fileName: "portrait-top", pixelWidth: 1000, pixelHeight: 1800,
+        focalX: 0.5, focalY: 0.25,
+        detectedFocusArea: PhotoFocusArea(CGRect(x: 0.3, y: 0.05, width: 0.4, height: 0.4))
+      ),
+      CollagePhoto(
+        fileName: "square", pixelWidth: 1400, pixelHeight: 1400,
+        detectedFocusArea: PhotoFocusArea(CGRect(x: 0.3, y: 0.3, width: 0.4, height: 0.4))
+      ),
+      CollagePhoto(
+        fileName: "wide-right", pixelWidth: 2000, pixelHeight: 1100,
+        focalX: 0.8, focalY: 0.5,
+        detectedFocusArea: PhotoFocusArea(CGRect(x: 0.65, y: 0.25, width: 0.3, height: 0.5))
+      ),
+    ]
+
+    let suggestions = LayoutEngine.fittingLayoutSamples(family: .smart, task: task)
+
+    XCTAssertEqual(LayoutFamily.browserCases.first, .smart)
+    XCTAssertGreaterThanOrEqual(suggestions.count, 3)
+    XCTAssertLessThanOrEqual(suggestions.count, 6)
+    XCTAssertEqual(Set(suggestions.map(\.id)).count, suggestions.count)
+    XCTAssertTrue(
+      suggestions.allSatisfy { suggestion in
+        LayoutCatalog.templates(photoCount: task.photos.count).contains(where: {
+          $0.id == suggestion.id
+        })
+      }
+    )
+  }
+
+  func testSmartLayoutAlwaysOffersAtLeastThreeChoicesForSupportedPhotoCounts() {
+    for photoCount in 2...12 {
+      var task = CollageTask.new(projectID: UUID())
+      task.canvas = .square
+      task.photos = (0..<photoCount).map { index in
+        CollagePhoto(
+          fileName: "photo-\(index)",
+          pixelWidth: index.isMultiple(of: 2) ? 1800 : 1100,
+          pixelHeight: index.isMultiple(of: 2) ? 1100 : 1800
+        )
+      }
+
+      let suggestions = LayoutEngine.smartLayoutSamples(for: task)
+
+      XCTAssertGreaterThanOrEqual(
+        suggestions.count,
+        3,
+        "Expected at least three Smart Layout choices for \(photoCount) photos"
+      )
+      XCTAssertEqual(Set(suggestions.map(\.id)).count, suggestions.count)
+    }
+  }
+
+  func testAutomaticRecommendationUsesFirstSmartLayout() throws {
+    var task = CollageTask.new(projectID: UUID())
+    task.photos = [
+      CollagePhoto(fileName: "landscape", pixelWidth: 1800, pixelHeight: 1200),
+      CollagePhoto(fileName: "portrait", pixelWidth: 1000, pixelHeight: 1600),
+      CollagePhoto(fileName: "square", pixelWidth: 1400, pixelHeight: 1400),
+      CollagePhoto(fileName: "landscape-2", pixelWidth: 2000, pixelHeight: 1200),
+    ]
+
+    let recommendation = LayoutEngine.recommendedCanvasAndTemplate(for: task)
+    task.canvas = recommendation.canvas
+    let firstSmartLayout = try XCTUnwrap(LayoutEngine.smartLayoutSamples(for: task).first)
+
+    XCTAssertEqual(recommendation.template.id, firstSmartLayout.id)
+  }
+
+  func testAutomaticRecommendationPrefersCanvasCloserToSquareWhenFitIsCompetitive() {
+    var task = CollageTask.new(projectID: UUID())
+    task.photos = [
+      CollagePhoto(fileName: "landscape", pixelWidth: 1600, pixelHeight: 1200),
+      CollagePhoto(fileName: "square", pixelWidth: 1200, pixelHeight: 1200),
+      CollagePhoto(fileName: "portrait", pixelWidth: 1200, pixelHeight: 1600),
+    ]
+
+    let recommendation = LayoutEngine.recommendedCanvasAndTemplate(for: task)
+    var recommendedTask = task
+    recommendedTask.canvas = recommendation.canvas
+    let recommendedFit = LayoutEngine.photoFit(for: recommendation.template, task: recommendedTask)
+
+    let bestFitsByCanvas = CanvasPreset.allCases.map { canvas in
+      var candidateTask = task
+      candidateTask.canvas = canvas
+      let bestFit = LayoutCatalog.templates(photoCount: task.photos.count)
+        .map { LayoutEngine.photoFit(for: $0, task: candidateTask) }
+        .max { $0.score < $1.score }!
+      return (canvas, bestFit)
+    }
+    let bestScore = bestFitsByCanvas.map { $0.1.score }.max() ?? 0
+    let closestCompetitiveCanvas = bestFitsByCanvas
+      .filter { $0.1.score >= bestScore - LayoutEngine.canvasPreferenceFitTolerance }
+      .min {
+        LayoutEngine.canvasDistanceFromSquare($0.0)
+          < LayoutEngine.canvasDistanceFromSquare($1.0)
+      }?.0
+
+    XCTAssertEqual(recommendation.canvas, closestCompetitiveCanvas)
+    XCTAssertGreaterThanOrEqual(
+      recommendedFit.score,
+      bestScore - LayoutEngine.canvasPreferenceFitTolerance - 0.000_001
+    )
   }
 
   func testEveryLayoutProducesValidFrames() {
@@ -1152,7 +1213,7 @@ final class LayoutEngineTests: XCTestCase {
       if photoCount >= 2 {
         XCTAssertEqual(
           Set(layouts.map { $0.family.browserFamily }),
-          Set(LayoutFamily.browserCases),
+          Set(LayoutFamily.browserCases.filter { $0 != .smart }),
           "Missing family for \(photoCount) photos"
         )
       }

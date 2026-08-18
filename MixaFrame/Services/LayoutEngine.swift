@@ -57,6 +57,20 @@ enum LayoutDividerAdjustment: Hashable {
 }
 
 enum LayoutEngine {
+  static let canvasPreferenceFitTolerance = 0.035
+  static let smartLayoutMinimumSuggestionCount = 3
+  static let smartLayoutMaximumSuggestionCount = 6
+
+  private struct SmartLayoutAssessment {
+    let template: CollageLayoutTemplate
+    let photoFit: LayoutPhotoFit
+    let subjectVisibility: Double
+
+    var score: Double {
+      photoFit.score * 0.72 + subjectVisibility * 0.28
+    }
+  }
+
   static func outputSize(for task: CollageTask) -> CGSize {
     let maxDimension = CGFloat(max(512, min(task.outputMaxDimension, 8192)))
 
@@ -180,6 +194,8 @@ enum LayoutEngine {
   ) -> [CollageLayoutTemplate] {
     LayoutCatalog.templates(photoCount: max(1, photoCount)).filter { template in
       switch family.browserFamily {
+      case .smart:
+        return true
       case .hero:
         if template.family == .hero { return true }
         guard template.family == .editorial,
@@ -207,7 +223,10 @@ enum LayoutEngine {
     family: LayoutFamily,
     task: CollageTask
   ) -> [CollageLayoutTemplate] {
-    fittingLayoutSamples(
+    if family == .smart {
+      return smartLayoutSamples(for: task)
+    }
+    return fittingLayoutSamples(
       family: family,
       task: task,
       samples: layoutSamples(family: family, photoCount: max(1, task.photos.count)),
@@ -220,6 +239,9 @@ enum LayoutEngine {
     task: CollageTask,
     mainPhotoCount: Int
   ) -> [CollageLayoutTemplate] {
+    if family == .smart {
+      return smartLayoutSamples(for: task)
+    }
     let samples = layoutSamples(
       family: family,
       photoCount: max(1, task.photos.count),
@@ -249,9 +271,8 @@ enum LayoutEngine {
         distinctSamples[key] = (template, fit)
         continue
       }
-      let selectedID = task.layoutID
-      if template.id == selectedID
-        || (existing.0.id != selectedID && fit.score > existing.1.score)
+      if fit.score > existing.1.score
+        || (abs(fit.score - existing.1.score) <= 0.000_001 && template.id < existing.0.id)
       {
         distinctSamples[key] = (template, fit)
       }
@@ -270,17 +291,75 @@ enum LayoutEngine {
     return
       candidates
       .sorted { left, right in
-        if family == .grid {
-          let leftIsSmartGrid = left.0.legacyLayout == .smartGrid
-          let rightIsSmartGrid = right.0.legacyLayout == .smartGrid
-          if leftIsSmartGrid != rightIsSmartGrid { return leftIsSmartGrid }
-        }
         if abs(left.1.score - right.1.score) > 0.000_001 {
           return left.1.score > right.1.score
         }
         return left.0.id < right.0.id
       }
       .map(\.0)
+  }
+
+  static func smartLayoutSamples(
+    for task: CollageTask,
+    minimumCount: Int = smartLayoutMinimumSuggestionCount,
+    maximumCount: Int = smartLayoutMaximumSuggestionCount
+  ) -> [CollageLayoutTemplate] {
+    let requiredCount = max(0, minimumCount)
+    let suggestionLimit = max(requiredCount, maximumCount)
+    let samples = LayoutCatalog.templates(photoCount: max(1, task.photos.count))
+    guard task.photos.count > 1 else { return Array(samples.prefix(suggestionLimit)) }
+
+    var distinctAssessments: [String: SmartLayoutAssessment] = [:]
+    for template in samples {
+      let assessment = SmartLayoutAssessment(
+        template: template,
+        photoFit: photoFit(for: template, task: task),
+        subjectVisibility: subjectVisibility(for: template, task: task)
+      )
+      let geometryKey = layoutGeometryKey(for: template, task: task)
+      guard let existing = distinctAssessments[geometryKey] else {
+        distinctAssessments[geometryKey] = assessment
+        continue
+      }
+      if isBetterSmartLayout(assessment, than: existing) {
+        distinctAssessments[geometryKey] = assessment
+      }
+    }
+
+    let ranked = distinctAssessments.values.sorted {
+      isBetterSmartLayout($0, than: $1)
+    }
+    let stronglyFitting = ranked.filter {
+      $0.photoFit.averageVisibleFraction >= 0.68
+        && $0.photoFit.minimumVisibleFraction >= 0.42
+        && $0.subjectVisibility >= 0.7
+    }
+    let bestScore = ranked.first?.score ?? 0
+    var selected = stronglyFitting.filter { $0.score >= bestScore - 0.12 }
+
+    for assessment in ranked
+    where selected.count < requiredCount
+      && !selected.contains(where: { $0.template.id == assessment.template.id })
+    {
+      selected.append(assessment)
+    }
+
+    return selected
+      .sorted { isBetterSmartLayout($0, than: $1) }
+      .prefix(suggestionLimit)
+      .map(\.template)
+  }
+
+  private static func isBetterSmartLayout(
+    _ candidate: SmartLayoutAssessment,
+    than other: SmartLayoutAssessment
+  ) -> Bool {
+    if abs(candidate.score - other.score) > 0.000_001 {
+      return candidate.score > other.score
+    }
+    if candidate.template.family == .grid, other.template.family != .grid { return true }
+    if candidate.template.family != .grid, other.template.family == .grid { return false }
+    return candidate.template.id < other.template.id
   }
 
   private static func layoutGeometryKey(
@@ -294,6 +373,7 @@ enum LayoutEngine {
     previewTask.spacing = 0
     previewTask.clearLayoutCustomization()
     previewTask.clearCustomLayout()
+    previewTask.clearSavedLayoutSnapshot()
     let size = outputSize(for: previewTask)
     let frameKeys = layoutFrames(for: previewTask, in: size).map { frame in
       let rect = frame.rect
@@ -327,7 +407,26 @@ enum LayoutEngine {
         recommendations.append((canvas, template, photoFit(for: template, task: candidateTask)))
       }
     }
-    let recommendation = recommendations.max { left, right in
+    let bestByCanvas = CanvasPreset.allCases.compactMap { canvas in
+      recommendations.filter { $0.0 == canvas }.max { left, right in
+        if abs(left.2.score - right.2.score) > 0.000_001 {
+          return left.2.score < right.2.score
+        }
+        if left.1.family == .grid, right.1.family != .grid { return false }
+        if left.1.family != .grid, right.1.family == .grid { return true }
+        return left.1.id > right.1.id
+      }
+    }
+    let bestFitScore = bestByCanvas.map { $0.2.score }.max() ?? 0
+    let competitiveRecommendations = bestByCanvas.filter {
+      $0.2.score >= bestFitScore - canvasPreferenceFitTolerance
+    }
+    let recommendation = competitiveRecommendations.max { left, right in
+      let leftSquareDistance = canvasDistanceFromSquare(left.0)
+      let rightSquareDistance = canvasDistanceFromSquare(right.0)
+      if abs(leftSquareDistance - rightSquareDistance) > 0.000_001 {
+        return leftSquareDistance > rightSquareDistance
+      }
       if abs(left.2.score - right.2.score) > 0.000_001 {
         return left.2.score < right.2.score
       }
@@ -337,7 +436,15 @@ enum LayoutEngine {
       if left.0 != .square, right.0 == .square { return true }
       return left.1.id > right.1.id
     }
-    return recommendation.map { ($0.0, $0.1) } ?? (task.canvas, layouts[0])
+    guard let recommendation else { return (task.canvas, layouts[0]) }
+    var recommendedTask = task
+    recommendedTask.canvas = recommendation.0
+    let firstSmartLayout = smartLayoutSamples(for: recommendedTask).first ?? recommendation.1
+    return (recommendation.0, firstSmartLayout)
+  }
+
+  static func canvasDistanceFromSquare(_ canvas: CanvasPreset) -> Double {
+    abs(log(Double(canvas.aspectRatio)))
   }
 
   static func recommendedTemplate(for task: CollageTask) -> CollageLayoutTemplate {
@@ -369,6 +476,8 @@ enum LayoutEngine {
     var candidateTask = task
     candidateTask.layoutID = template.id
     candidateTask.clearLayoutCustomization()
+    candidateTask.clearCustomLayout()
+    candidateTask.clearSavedLayoutSnapshot()
     candidateTask.isPhotoOrderManuallyAdjusted = true
     candidateTask.mainPhotoCount = defaultMainPhotoCount(for: template.recipe)
     let frames = layoutFrames(for: candidateTask, in: outputSize(for: candidateTask))
@@ -390,6 +499,60 @@ enum LayoutEngine {
       averageVisibleFraction: visibleFractions.reduce(0, +) / Double(visibleFractions.count),
       minimumVisibleFraction: visibleFractions.min() ?? 0
     )
+  }
+
+  private static func subjectVisibility(
+    for template: CollageLayoutTemplate,
+    task: CollageTask
+  ) -> Double {
+    guard task.photos.contains(where: { $0.detectedFocusArea != nil }) else { return 1 }
+    var candidateTask = task
+    candidateTask.layoutID = template.id
+    candidateTask.mainPhotoCount = defaultMainPhotoCount(for: template.recipe)
+    candidateTask.isPhotoOrderManuallyAdjusted = false
+    candidateTask.clearLayoutCustomization()
+    candidateTask.clearCustomLayout()
+    candidateTask.clearSavedLayoutSnapshot()
+    let frames = layoutFrames(for: candidateTask, in: outputSize(for: candidateTask))
+    guard frames.count == task.photos.count else { return 0 }
+
+    var retainedSubjects: [Double] = []
+    for (photo, frame) in zip(task.photos, frames) {
+      guard let detectedSubject = photo.detectedFocusArea?.rect.standardized,
+        detectedSubject.width > 0,
+        detectedSubject.height > 0
+      else { continue }
+      if frame.usesAspectFit {
+        retainedSubjects.append(1)
+        continue
+      }
+
+      let boundedSubject = detectedSubject.intersection(CGRect(x: 0, y: 0, width: 1, height: 1))
+      guard !boundedSubject.isNull, boundedSubject.width > 0, boundedSubject.height > 0 else {
+        continue
+      }
+      let focalPoint = CGPoint(
+        x: photo.focusSource == .manual ? boundedSubject.midX : photo.focalX,
+        y: photo.focusSource == .manual ? boundedSubject.midY : photo.focalY
+      )
+      let frameRatio = frame.rect.width / max(frame.rect.height, 1)
+      let cropRect = PhotoCropGeometry.normalizedCropRect(
+        sourceAspectRatio: photo.aspectRatio,
+        destinationAspectRatio: frameRatio,
+        focalPoint: focalPoint,
+        zoom: 1
+      )
+      let retainedRect = cropRect.intersection(boundedSubject)
+      let subjectArea = boundedSubject.width * boundedSubject.height
+      let retainedArea =
+        retainedRect.isNull ? 0 : max(0, retainedRect.width) * max(0, retainedRect.height)
+      retainedSubjects.append(min(1, max(0, Double(retainedArea / subjectArea))))
+    }
+
+    guard !retainedSubjects.isEmpty else { return 1 }
+    let average = retainedSubjects.reduce(0, +) / Double(retainedSubjects.count)
+    let minimum = retainedSubjects.min() ?? 0
+    return average * 0.7 + minimum * 0.3
   }
 
   static func matchingMainPhotoTemplate(
@@ -568,17 +731,6 @@ enum LayoutEngine {
     let defaultColumnWeights: [[Double]]
 
     switch template.recipe {
-    case .smartGrid:
-      let columns = smartGridColumnCount(
-        photoCount: count,
-        photoAspectRatios: task.photos.map(\.aspectRatio),
-        in: CGRect(origin: .zero, size: size),
-        spacing: spacing
-      )
-      rowCounts = gridRowCounts(count: count, columns: columns)
-      defaultRowWeights = Array(repeating: 1, count: rowCounts.count)
-      defaultColumnWeights = rowCounts.map { Array(repeating: 1, count: $0) }
-
     case .grid(let columns, let lastRow) where lastRow == .stretch:
       rowCounts = gridRowCounts(count: count, columns: columns)
       defaultRowWeights = Array(repeating: 1, count: rowCounts.count)
@@ -1190,28 +1342,6 @@ enum LayoutEngine {
     }
 
     switch template.recipe {
-    case .smartGrid:
-      if let layoutAdjustment {
-        return arranged(
-          weightedGridFrames(
-            rowCounts: layoutAdjustment.rowCounts,
-            rowWeights: layoutAdjustment.rowWeights,
-            columnWeights: layoutAdjustment.columnWeights,
-            in: rect,
-            spacing: spacing
-          ).map { LayoutFrame(rect: $0) })
-      }
-      let columns = smartGridColumnCount(
-        photoCount: photoCount,
-        photoAspectRatios: photoAspectRatios,
-        in: rect,
-        spacing: spacing
-      )
-      let filledFrames = gridFrames(
-        count: photoCount, in: rect, spacing: spacing, columns: columns, lastRow: .stretch
-      ).map { LayoutFrame(rect: $0) }
-      return arranged(filledFrames)
-
     case .grid(let columns, let lastRow):
       if lastRow == .stretch, let layoutAdjustment {
         return arranged(
@@ -1836,67 +1966,6 @@ enum LayoutEngine {
       }
     }
     return Array(frames.prefix(count))
-  }
-
-  private static func smartGridColumnCount(
-    photoCount: Int,
-    photoAspectRatios: [CGFloat],
-    in rect: CGRect,
-    spacing: CGFloat
-  ) -> Int {
-    guard photoCount > 1 else { return 1 }
-
-    let safeRatios = photoAspectRatios.prefix(photoCount).map {
-      min(4, max(0.25, Double($0)))
-    }
-    let ratios = safeRatios.isEmpty ? Array(repeating: 1.0, count: photoCount) : safeRatios
-    let canvasAspectRatio = Double(rect.width / max(rect.height, 1))
-    let canvasIsLandscape = canvasAspectRatio >= 1
-
-    func score(columns: Int) -> Double {
-      let rows = Int(ceil(Double(photoCount) / Double(columns)))
-      let capacity = rows * columns
-      let emptyCells = capacity - photoCount
-      let lastRowCount = photoCount - (rows - 1) * columns
-      let candidateFrameRatios = gridFrames(
-        count: photoCount,
-        in: rect,
-        spacing: spacing,
-        columns: columns,
-        lastRow: .stretch
-      ).map { frame in
-        min(4, max(0.25, Double(frame.width / max(frame.height, 1))))
-      }
-
-      // Sorted log-ratio matching is the minimum total crop distance for these slots.
-      let cropCost =
-        zip(ratios.sorted(), candidateFrameRatios.sorted()).reduce(0.0) {
-          total, pair in
-          total + abs(log(pair.0 / pair.1))
-        } / Double(photoCount)
-      let unusedCellCost = Double(emptyCells) / Double(capacity) * 1.6
-      let incompleteRowCost =
-        emptyCells == 0
-        ? 0
-        : (1 - Double(lastRowCount) / Double(columns)) * 0.55
-      let orientationCost: Double
-      if (canvasIsLandscape && columns < rows) || (!canvasIsLandscape && columns > rows) {
-        orientationCost = 0.18
-      } else {
-        orientationCost = 0
-      }
-
-      return cropCost + unusedCellCost + incompleteRowCost + orientationCost
-    }
-
-    return (1...photoCount).min { left, right in
-      let leftScore = score(columns: left)
-      let rightScore = score(columns: right)
-      if abs(leftScore - rightScore) > 0.000_001 {
-        return leftScore < rightScore
-      }
-      return canvasIsLandscape ? left > right : left < right
-    } ?? 1
   }
 
   private static func framesAssignedByPhoto(
