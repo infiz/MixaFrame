@@ -25,6 +25,7 @@ struct CollageEditorView: View {
   @State private var showingSubscription = false
   @State private var pendingExportAction: PendingExportAction?
   @State private var isSaveChoicePresented = false
+  @State private var shouldPresentSubscriptionAfterSaveChoice = false
   @State private var isPhotoExportChoicePresented = false
   @State private var pendingPhotoLibraryExportMode: PhotoLibraryExportMode?
 
@@ -41,22 +42,8 @@ struct CollageEditorView: View {
 
   var body: some View {
     editorContent
-      .confirmationDialog(
-        "Save Collage",
-        isPresented: $isSaveChoicePresented,
-        titleVisibility: .visible
-      ) {
-        Button("Save and Export") {
-          beginSaving(dismissAfterSave: false) {
-            performExportAction(.saveToPhotos)
-          }
-        }
-        Button("Save and Keep Editing") {
-          beginSaving(dismissAfterSave: false)
-        }
-        Button("Cancel", role: .cancel) {}
-      } message: {
-        Text("Save the editable collage, then export it to Photos or continue editing.")
+      .sheet(isPresented: $isSaveChoicePresented, onDismiss: completeSaveChoiceDismissal) {
+        saveCollageSheet
       }
       .sheet(isPresented: $isPhotoExportChoicePresented, onDismiss: completePhotoExportChoice) {
         if let identifier = draft.exportedPhotoLibraryAssetIdentifier {
@@ -77,15 +64,87 @@ struct CollageEditorView: View {
       }
   }
 
+  private var saveCollageSheet: some View {
+    NavigationStack {
+      VStack(alignment: .leading, spacing: 14) {
+        Text("Save the editable collage, then export it to Photos or continue editing.")
+          .font(.subheadline)
+          .foregroundStyle(.secondary)
+
+        Button {
+          isSaveChoicePresented = false
+          beginSaving(dismissAfterSave: false) {
+            performExportAction(.saveToPhotos)
+          }
+        } label: {
+          Label("Save and Export", systemImage: "square.and.arrow.down")
+            .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.borderedProminent)
+        .controlSize(.large)
+
+        if !subscriptions.hasPremiumAccess {
+          Button {
+            shouldPresentSubscriptionAfterSaveChoice = true
+            isSaveChoicePresented = false
+          } label: {
+            Label("Subscribe to remove the watermark", systemImage: "crown")
+              .font(.subheadline)
+              .frame(maxWidth: .infinity, alignment: .leading)
+          }
+          .buttonStyle(.plain)
+          .foregroundStyle(.indigo)
+          .disabled(!subscriptions.hasLoadedEntitlements)
+        }
+
+        Button {
+          isSaveChoicePresented = false
+          beginSaving(dismissAfterSave: false)
+        } label: {
+          Label("Save and Keep Editing", systemImage: "square.and.pencil")
+            .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.large)
+
+        Button("Cancel", role: .cancel) {
+          isSaveChoicePresented = false
+        }
+        .frame(maxWidth: .infinity)
+      }
+      .padding(20)
+      .frame(maxHeight: .infinity, alignment: .top)
+      .navigationTitle("Save Collage")
+      .navigationBarTitleDisplayMode(.inline)
+    }
+    .presentationDetents([.height(subscriptions.hasPremiumAccess ? 300 : 330)])
+    .presentationDragIndicator(.visible)
+  }
+
+  private func completeSaveChoiceDismissal() {
+    guard shouldPresentSubscriptionAfterSaveChoice else { return }
+    shouldPresentSubscriptionAfterSaveChoice = false
+    showingSubscription = true
+  }
+
   private var editorContent: some View {
     NavigationStack {
       GeometryReader { proxy in
+        let isLandscapeEditing =
+          !isControlsHidden && proxy.size.width > proxy.size.height
+        let workspaceWidth =
+          isLandscapeEditing
+          ? landscapePreviewWorkspaceWidth(for: proxy.size)
+          : proxy.size.width
+
         ZStack(alignment: .trailing) {
-          previewWorkspace(
-            maximumHeight: previewMaximumHeight(for: proxy.size),
-            showsFooter: !isControlsHidden
+          previewWorkspace(maximumHeight: previewMaximumHeight(for: proxy.size))
+          .frame(width: workspaceWidth)
+          .frame(
+            maxWidth: .infinity,
+            maxHeight: .infinity,
+            alignment: isLandscapeEditing ? .leading : .top
           )
-          .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
           .animation(.easeInOut(duration: 0.22), value: activeEditorTool)
 
           if isControlsHidden {
@@ -277,86 +336,122 @@ struct CollageEditorView: View {
     }
   }
 
-  private func previewWorkspace(maximumHeight: CGFloat, showsFooter: Bool) -> some View {
-    VStack(spacing: 6) {
-      CollagePreview(
-        task: draft,
-        imageLoader: store.previewImage(for:),
-        onViewPhoto: { showOriginalPhoto(id: $0) },
-        onMovePhoto: { swapPhotos(sourceID: $0, targetID: $1) },
-        onAdjustCrop: { adjustCrop(photoID: $0, focalPoint: $1) },
-        onAdjustZoom: { adjustZoom(photoID: $0, zoom: $1) },
-        showsLayoutDividers: !isControlsHidden && activeEditorTool == .layout,
-        onAdjustLayoutDivider: adjustLayoutDivider,
-        maximumHeight: maximumHeight
-      )
-
-      if showsFooter {
-        HStack(spacing: 8) {
-          Button {
-            toggleControls()
-          } label: {
-            Label("Full Canvas", systemImage: "arrow.up.left.and.arrow.down.right")
-          }
-          .buttonStyle(.borderless)
-          Spacer()
-          if draft.photos.isEmpty {
-            Text("Add at least 2 photos")
-          } else {
-            let outputSize = LayoutEngine.outputSize(for: draft)
-            Text("\(Int(outputSize.width)) × \(Int(outputSize.height)) px")
-              .monospacedDigit()
-          }
-        }
-        .font(.caption)
-        .foregroundStyle(.secondary)
-
-        if !draft.photos.isEmpty {
-          Text(
-            "Hold briefly, then drag to crop · Pinch to zoom · Double-tap for original · Hold longer to swap"
-          )
-          .font(.caption2)
-          .foregroundStyle(.tertiary)
-        }
-      }
-    }
+  private func previewWorkspace(maximumHeight: CGFloat) -> some View {
+    CollagePreview(
+      task: draft,
+      imageLoader: store.previewImage(for:),
+      onViewPhoto: { showOriginalPhoto(id: $0) },
+      onMovePhoto: { swapPhotos(sourceID: $0, targetID: $1) },
+      onAdjustCrop: { adjustCrop(photoID: $0, focalPoint: $1) },
+      onAdjustZoom: { adjustZoom(photoID: $0, zoom: $1) },
+      onAdjustLayoutDivider: adjustLayoutDivider,
+      maximumHeight: maximumHeight
+    )
     .padding(.horizontal, 16)
-    .padding(.top, 6)
     .padding(.bottom, 8)
     .frame(maxWidth: .infinity)
     .background(Color(uiColor: .systemBackground))
   }
 
+  @ViewBuilder
   private func editorControls(availableSize: CGSize) -> some View {
+    let isLandscape = availableSize.width > availableSize.height
     let panelWidth = min(680, max(1, availableSize.width - 16))
-    let controlsHeight = max(180, min(520, availableSize.height * 0.5 - 8))
+    let defaultControlsHeight = availableSize.height * 0.5 - 8
+    let availableControlsHeight =
+      availableSize.height
+      - previewMaximumHeight(for: availableSize)
+      - editorPortraitReservedVerticalSpace
+    let controlsHeight = max(
+      editorMinimumControlsHeight,
+      min(
+        520,
+        usesSquareCanvas ? availableControlsHeight : defaultControlsHeight
+      )
+    )
     let toolBarHeight: CGFloat = 54
     let settingsHeight = max(118, controlsHeight - toolBarHeight - 8)
 
-    return ZStack(alignment: .bottom) {
-      VStack(spacing: 8) {
-        settingsPanel(
-          for: activeEditorTool,
-          width: panelWidth,
-          height: settingsHeight
-        )
+    if isLandscape {
+      let landscapePanelWidth = landscapeSettingsPanelWidth(for: availableSize)
+      let landscapeControlsHeight = min(520, max(180, availableSize.height - 16))
 
-        bottomToolBar
-          .frame(width: panelWidth, height: toolBarHeight)
+      ZStack(alignment: .trailing) {
+        HStack(spacing: 8) {
+          settingsPanel(
+            for: activeEditorTool,
+            width: landscapePanelWidth,
+            height: landscapeControlsHeight
+          )
+
+          rightToolBar
+            .frame(width: toolBarHeight)
+        }
+        .padding(.trailing, 8)
+        .transition(.move(edge: .trailing).combined(with: .opacity))
       }
-      .padding(.bottom, 8)
-      .transition(.move(edge: .bottom).combined(with: .opacity))
+      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
+      .animation(.easeInOut(duration: 0.22), value: activeEditorTool)
+    } else {
+      ZStack(alignment: .bottom) {
+        VStack(spacing: 8) {
+          settingsPanel(
+            for: activeEditorTool,
+            width: panelWidth,
+            height: settingsHeight
+          )
+
+          bottomToolBar
+            .frame(width: panelWidth, height: toolBarHeight)
+        }
+        .padding(.bottom, 8)
+        .transition(.move(edge: .bottom).combined(with: .opacity))
+      }
+      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+      .animation(.easeInOut(duration: 0.22), value: activeEditorTool)
     }
-    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-    .animation(.easeInOut(duration: 0.22), value: activeEditorTool)
   }
 
   private func previewMaximumHeight(for availableSize: CGSize) -> CGFloat {
     if isControlsHidden {
       return max(140, availableSize.height - 12)
     }
+    if availableSize.width > availableSize.height {
+      return max(140, availableSize.height - 14)
+    }
+    if usesSquareCanvas {
+      let fullWidthSquare = max(140, availableSize.width - 32)
+      let heightBeforeControls = max(
+        140,
+        availableSize.height
+          - editorMinimumControlsHeight
+          - editorPortraitReservedVerticalSpace
+      )
+      return min(fullWidthSquare, heightBeforeControls)
+    }
     return max(140, availableSize.height * 0.42)
   }
+
+  private func landscapePreviewWorkspaceWidth(for availableSize: CGSize) -> CGFloat {
+    let controlsWidth =
+      landscapeSettingsPanelWidth(for: availableSize)
+      + editorLandscapeToolbarWidth
+      + 16
+    return max(140, availableSize.width - controlsWidth - 8)
+  }
+
+  private func landscapeSettingsPanelWidth(for availableSize: CGSize) -> CGFloat {
+    min(420, max(260, availableSize.width * 0.42))
+  }
+
+  private var usesSquareCanvas: Bool {
+    let outputSize = LayoutEngine.outputSize(for: draft)
+    return abs(outputSize.width - outputSize.height) < 0.5
+  }
+
+  private var editorMinimumControlsHeight: CGFloat { 180 }
+  private var editorPortraitReservedVerticalSpace: CGFloat { 24 }
+  private var editorLandscapeToolbarWidth: CGFloat { 54 }
 
   private var bottomToolBar: some View {
     HStack(spacing: 12) {
@@ -367,6 +462,22 @@ struct CollageEditorView: View {
     .padding(.horizontal, 10)
     .padding(.vertical, 6)
     .frame(maxWidth: .infinity)
+    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+    .overlay {
+      RoundedRectangle(cornerRadius: 16)
+        .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+    }
+    .shadow(color: .black.opacity(0.12), radius: 8, y: 3)
+  }
+
+  private var rightToolBar: some View {
+    VStack(spacing: 12) {
+      ForEach(EditorTool.allCases) { tool in
+        toolButton(tool)
+      }
+    }
+    .padding(.horizontal, 6)
+    .padding(.vertical, 10)
     .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
     .overlay {
       RoundedRectangle(cornerRadius: 16)
@@ -462,8 +573,38 @@ struct CollageEditorView: View {
   private func settingsPanel(for tool: EditorTool, width: CGFloat, height: CGFloat) -> some View {
     VStack(spacing: 0) {
       HStack {
-        Label(tool.title, systemImage: tool.symbol)
-          .font(.headline)
+        if tool == .photos {
+          HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Label(tool.title, systemImage: tool.symbol)
+              .font(.headline)
+
+            Text("\(draft.photos.count)/12")
+              .font(.caption.weight(.semibold))
+              .foregroundStyle(.secondary)
+              .monospacedDigit()
+
+            PhotosPicker(
+              selection: $pickerItems,
+              maxSelectionCount: max(0, 12 - draft.photos.count),
+              matching: .images
+            ) {
+              Text("Add Photos")
+                .font(.subheadline.weight(.semibold))
+            }
+            .offset(y: 1)
+            .disabled(isImporting || draft.photos.count >= 12)
+          }
+        } else {
+          Label(tool.title, systemImage: tool.symbol)
+            .font(.headline)
+
+          if tool == .canvas {
+            collageBackgroundToggle
+          } else if tool == .layout {
+            aspectRatioMenu
+          }
+        }
+
         Spacer()
         Button {
           toggleControls()
@@ -480,10 +621,7 @@ struct CollageEditorView: View {
 
       Divider()
 
-      Form {
-        settingsSections(for: tool)
-      }
-      .scrollContentBackground(.hidden)
+      settingsForm(for: tool)
     }
     .frame(width: width, height: height)
     .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18))
@@ -496,19 +634,81 @@ struct CollageEditorView: View {
   }
 
   @ViewBuilder
+  private func settingsForm(for tool: EditorTool) -> some View {
+    let form = Form {
+      settingsSections(for: tool)
+    }
+    .scrollContentBackground(.hidden)
+
+    if tool == .photos || tool == .layout || tool == .canvas || tool == .output {
+      form.contentMargins(.top, 0, for: .scrollContent)
+    } else {
+      form
+    }
+  }
+
+  private var collageBackgroundToggle: some View {
+    HStack(spacing: 6) {
+      Image(systemName: draft.background.symbol)
+        .foregroundStyle(.secondary)
+
+      Toggle(
+        "Collage Background",
+        isOn: Binding(
+          get: { draft.background == .dark },
+          set: { draft.background = $0 ? .dark : .white }
+        )
+      )
+      .labelsHidden()
+      .toggleStyle(.switch)
+      .controlSize(.small)
+    }
+    .accessibilityElement(children: .combine)
+    .accessibilityLabel("Collage Background")
+    .accessibilityValue(draft.background.title)
+  }
+
+  private var aspectRatioMenu: some View {
+    Menu {
+      ForEach(CanvasPreset.allCases) { preset in
+        Button {
+          selectCanvas(preset)
+        } label: {
+          if draft.canvas == preset {
+            Label(preset.title, systemImage: "checkmark")
+          } else {
+            Text(preset.title)
+          }
+        }
+      }
+    } label: {
+      HStack(spacing: 3) {
+        Text("Ratio · \(canvasRatioLabel)")
+        Image(systemName: "chevron.down")
+          .font(.caption2.weight(.semibold))
+      }
+      .font(.subheadline.weight(.semibold))
+      .lineLimit(1)
+    }
+    .disabled(LayoutEngine.isNaturalVerticalStrip(draft))
+    .accessibilityLabel("Aspect Ratio")
+    .accessibilityValue(draft.canvas.title)
+  }
+
+  private var canvasRatioLabel: String {
+    switch draft.canvas {
+    case .square: "1:1"
+    case .portrait: "4:5"
+    case .landscape: "3:2"
+    case .story: "9:16"
+    }
+  }
+
+  @ViewBuilder
   private func settingsSections(for tool: EditorTool) -> some View {
     switch tool {
     case .photos:
       Section {
-        PhotosPicker(
-          selection: $pickerItems,
-          maxSelectionCount: max(0, 12 - draft.photos.count),
-          matching: .images
-        ) {
-          Label("Add Photos", systemImage: "photo.badge.plus")
-        }
-        .disabled(isImporting || draft.photos.count >= 12)
-
         if isImporting {
           HStack {
             ProgressView()
@@ -526,8 +726,6 @@ struct CollageEditorView: View {
           )
         }
         .onMove(perform: movePhotos)
-      } header: {
-        Text("\(draft.photos.count) of 12 photos")
       } footer: {
         Text(
           "Tap a photo row to view the original photo. Touch and hold a photo on the canvas, then drag it onto another frame to swap."
@@ -536,52 +734,9 @@ struct CollageEditorView: View {
 
     case .layout:
       Section {
-        Picker(
-          "Aspect Ratio",
-          selection: Binding(
-            get: { draft.canvas },
-            set: { selectCanvas($0) }
-          )
-        ) {
-          ForEach(CanvasPreset.allCases) { preset in
-            Text(preset.title).tag(preset)
-          }
-        }
-        .disabled(LayoutEngine.isNaturalVerticalStrip(draft))
-
         layoutSelector
-        if LayoutEngine.isNaturalVerticalStrip(draft) {
-          let outputWidth = Int(LayoutEngine.outputSize(for: draft).width)
-          Label(
-            "Every photo initially spans the \(outputWidth) px output width at its natural aspect ratio. Drag a divider to customize photo heights.",
-            systemImage: "rectangle.portrait.on.rectangle.portrait"
-          )
-          .font(.caption)
-          .foregroundStyle(.secondary)
-        } else if draft.photos.count > 1 {
-          Label(
-            "Drag the handles on the collage to resize neighboring rows and columns.",
-            systemImage: "square.grid.2x2"
-          )
-          .font(.caption)
-          .foregroundStyle(.secondary)
-        } else {
-          Label(
-            "Add another photo to create an adjustable divider.",
-            systemImage: "info.circle"
-          )
-          .font(.caption)
-          .foregroundStyle(.secondary)
-        }
-        if draft.layoutRowWeights != nil || draft.layoutColumnWeights != nil
-          || draft.layoutFrameOverrides != nil
-        {
-          Button {
-            resetLayoutDividerSizes()
-          } label: {
-            Label("Reset Divider Sizes", systemImage: "arrow.counterclockwise")
-          }
-        }
+          .listRowInsets(EdgeInsets(top: 2, leading: 16, bottom: 8, trailing: 16))
+
         VStack(alignment: .leading) {
           HStack {
             Text("Spacing")
@@ -623,11 +778,17 @@ struct CollageEditorView: View {
           )
           .accessibilityValue("\(Int(draft.canvasCornerRadius)) percent")
         }
-        if draft.usesAutomaticPhotoArrangement {
-          Label("Photos arranged by layout fit", systemImage: "checkmark.circle.fill")
-            .font(.caption)
-            .foregroundStyle(.secondary)
-        } else {
+
+        if draft.layoutRowWeights != nil || draft.layoutColumnWeights != nil
+          || draft.layoutFrameOverrides != nil
+        {
+          Button {
+            resetLayoutDividerSizes()
+          } label: {
+            Label("Reset Divider Sizes", systemImage: "arrow.counterclockwise")
+          }
+        }
+        if !draft.usesAutomaticPhotoArrangement {
           Button {
             refitPhotosForCurrentLayout()
           } label: {
@@ -637,113 +798,173 @@ struct CollageEditorView: View {
       }
 
     case .canvas:
-      Section("Collage Background") {
-        Picker("Background", selection: $draft.background) {
-          ForEach(CollageBackground.allCases) { background in
-            Label(background.title, systemImage: background.symbol).tag(background)
-          }
-        }
-        .pickerStyle(.segmented)
+      Section {
+        VStack(alignment: .leading, spacing: 8) {
+          Text("Resolution")
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(.secondary)
 
-      }
-
-      Section("Resolution") {
-        ForEach(ResolutionPreset.allCases) { preset in
-          Button {
-            draft.outputMaxDimension = preset.rawValue
-          } label: {
-            HStack {
-              Text(preset.title)
-              Spacer()
-              if draft.outputMaxDimension == preset.rawValue {
-                Image(systemName: "checkmark").foregroundStyle(.indigo)
+          VStack(alignment: .leading, spacing: 3) {
+            LazyVGrid(
+              columns: [
+                GridItem(.flexible(), spacing: 10),
+                GridItem(.flexible(), spacing: 10),
+              ],
+              spacing: 10
+            ) {
+              ForEach(ResolutionPreset.allCases) { preset in
+                Button {
+                  draft.outputMaxDimension = preset.rawValue
+                } label: {
+                  HStack(spacing: 6) {
+                    Text(preset.title)
+                      .lineLimit(1)
+                      .minimumScaleFactor(0.75)
+                    Spacer(minLength: 0)
+                    if draft.outputMaxDimension == preset.rawValue {
+                      Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(.indigo)
+                    }
+                  }
+                  .font(.subheadline)
+                  .padding(.horizontal, 10)
+                  .frame(maxWidth: .infinity, minHeight: 42)
+                  .background(
+                    draft.outputMaxDimension == preset.rawValue
+                      ? Color.indigo.opacity(0.12) : Color.secondary.opacity(0.08),
+                    in: RoundedRectangle(cornerRadius: 10)
+                  )
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.primary)
               }
             }
+
+            HStack(spacing: 6) {
+              HStack(spacing: 6) {
+                Text("Custom · \(draft.outputMaxDimension) px")
+                  .lineLimit(1)
+                  .minimumScaleFactor(0.75)
+                Spacer(minLength: 0)
+                if ResolutionPreset(rawValue: draft.outputMaxDimension) == nil {
+                  Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(.indigo)
+                }
+              }
+              .font(.subheadline)
+              .padding(.horizontal, 10)
+              .frame(maxWidth: .infinity, minHeight: 42)
+              .background(
+                ResolutionPreset(rawValue: draft.outputMaxDimension) == nil
+                  ? Color.indigo.opacity(0.12) : Color.secondary.opacity(0.08),
+                in: RoundedRectangle(cornerRadius: 10)
+              )
+
+              Stepper(
+                "Custom resolution",
+                value: $draft.outputMaxDimension,
+                in: 512...8192,
+                step: 128
+              )
+              .labelsHidden()
+              .fixedSize()
+            }
           }
-          .foregroundStyle(.primary)
         }
-        Stepper(
-          "Custom · \(draft.outputMaxDimension) px",
-          value: $draft.outputMaxDimension,
-          in: 512...8192,
-          step: 128
-        )
       }
 
     case .output:
       Section {
-        Button {
-          requestExportAction(.preview)
-        } label: {
-          Label("Preview Export", systemImage: "eye")
-        }
-
-        Button {
-          requestExportAction(.saveToPhotos)
-        } label: {
-          HStack {
-            Label("Save to Photos", systemImage: "square.and.arrow.down")
-            Spacer()
-            if subscriptions.hasPremiumAccess {
-              Image(systemName: "crown.fill")
-                .foregroundStyle(.green)
-                .accessibilityLabel("Premium active")
+        VStack(alignment: .leading, spacing: 8) {
+          HStack(spacing: 12) {
+            Button {
+              requestExportAction(.preview)
+            } label: {
+              HStack(spacing: 5) {
+                Image(systemName: "eye")
+                Text("Preview")
+              }
+              .font(.subheadline.weight(.semibold))
+              .lineLimit(1)
+              .fixedSize(horizontal: true, vertical: false)
             }
-          }
-        }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
 
-        if !subscriptions.hasPremiumAccess {
-          Button {
-            showingSubscription = true
-          } label: {
-            Label("Subscribe to remove the MixaFrame watermark", systemImage: "crown")
+            Button {
+              requestExportAction(.saveToPhotos)
+            } label: {
+              HStack(spacing: 6) {
+                Image(systemName: "square.and.arrow.down")
+                Text("Export")
+                if subscriptions.hasPremiumAccess {
+                  Image(systemName: "crown.fill")
+                    .foregroundStyle(.green)
+                  .accessibilityLabel("Premium active")
+                }
+              }
+              .font(.subheadline.weight(.semibold))
+              .lineLimit(1)
+              .fixedSize(horizontal: true, vertical: false)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
           }
-        }
-      } header: {
-        Text("Export")
-      } footer: {
-        Text(
-          subscriptions.hasPremiumAccess
-            ? "Preview the finished image first, or save it directly to Photos."
-            : "Editing stays free. Start the 7-day trial to export without the MixaFrame watermark."
-        )
-      }
-      .disabled(
-        draft.photos.count < 2 || isExporting || !subscriptions.hasLoadedEntitlements
-      )
-
-      Section("Output") {
-        Picker("Format", selection: $draft.outputFormat) {
-          ForEach(OutputFormat.allCases) { format in
-            Text(format.title).tag(format)
-          }
-        }
-        .pickerStyle(.segmented)
-        Text(draft.outputFormat.summary)
-          .font(.caption)
-          .foregroundStyle(.secondary)
-
-        if draft.outputFormat == .png {
-          LabeledContent("Quality", value: "Lossless")
-          Label(
-            "PNG preserves image fidelity; compression affects encoding time rather than visual quality.",
-            systemImage: "info.circle"
+          .disabled(
+            draft.photos.count < 2 || isExporting || !subscriptions.hasLoadedEntitlements
           )
-          .font(.caption)
-          .foregroundStyle(.secondary)
-        } else {
-          Picker("Quality", selection: $draft.quality) {
-            ForEach(OutputQuality.allCases) { quality in
-              Text(quality.title).tag(quality)
+
+          if !subscriptions.hasPremiumAccess {
+            Button {
+              showingSubscription = true
+            } label: {
+              Label("Subscribe to remove the watermark", systemImage: "crown")
+                .font(.subheadline)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.indigo)
+            .disabled(!subscriptions.hasLoadedEntitlements)
+          }
+
+          Text("Output")
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .padding(.top, 2)
+
+          Picker("Format", selection: $draft.outputFormat) {
+            ForEach(OutputFormat.allCases) { format in
+              Text(format.title).tag(format)
             }
           }
-          ForEach(OutputQuality.allCases) { quality in
-            HStack {
-              Text(quality.title)
-              Spacer()
-              Text(quality.summary)
-                .font(.caption)
-                .foregroundStyle(quality == draft.quality ? .primary : .secondary)
+          .pickerStyle(.segmented)
+
+          Text(draft.outputFormat.summary)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+
+          if draft.outputFormat == .png {
+            LabeledContent("Quality", value: "Lossless")
+            Label(
+              "PNG preserves image fidelity; compression affects encoding time rather than visual quality.",
+              systemImage: "info.circle"
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+          } else {
+            Picker("Quality", selection: $draft.quality) {
+              ForEach(OutputQuality.allCases) { quality in
+                Text(quality.title).tag(quality)
+              }
+            }
+            ForEach(OutputQuality.allCases) { quality in
+              HStack {
+                Text(quality.title)
+                Spacer()
+                Text(quality.summary)
+                  .font(.caption)
+                  .foregroundStyle(quality == draft.quality ? .primary : .secondary)
+              }
             }
           }
         }
@@ -771,76 +992,84 @@ struct CollageEditorView: View {
       availableFamilies.contains(selectedLayoutFamily)
       ? selectedLayoutFamily : availableFamilies.first ?? .grid
     let familyLayouts = fittedLayouts[displayedFamily] ?? []
-    let availableLayoutCount = fittedLayouts.values.reduce(0) { $0 + $1.count }
     let selectedTemplate = LayoutEngine.selectedTemplate(for: draft)
 
     return VStack(alignment: .leading, spacing: 8) {
-      HStack {
-        Text("Layout")
-        Spacer()
-        Text("\(selectedTemplate.title) · \(availableLayoutCount) options")
-          .font(.caption)
-          .foregroundStyle(.secondary)
-          .lineLimit(1)
-      }
-
-      ScrollView(.horizontal, showsIndicators: false) {
-        HStack(spacing: 6) {
-          ForEach(availableFamilies) { family in
-            Button {
-              selectedLayoutFamily = family
-            } label: {
-              Label(family.title, systemImage: family.symbol)
-                .font(.caption.weight(.medium))
-                .padding(.horizontal, 9)
-                .frame(height: 30)
-                .foregroundStyle(displayedFamily == family ? Color.white : Color.primary)
-                .background(
-                  displayedFamily == family
-                    ? Color.indigo : Color(uiColor: .secondarySystemBackground),
-                  in: Capsule()
-                )
-            }
-            .buttonStyle(.plain)
-            .accessibilityAddTraits(displayedFamily == family ? .isSelected : [])
-          }
-        }
-        .padding(.vertical, 2)
-      }
-
-      ScrollView(.horizontal, showsIndicators: false) {
-        LazyHStack(spacing: 9) {
-          ForEach(familyLayouts) { template in
-            Button {
-              selectLayout(template)
-            } label: {
-              VStack(spacing: 4) {
-                LayoutThumbnail(
-                  template: selectedTemplate.id == template.id ? selectedTemplate : template,
-                  task: draft,
-                  isSelected: selectedTemplate.id == template.id
-                )
-                Text(template.title)
-                  .font(.caption2)
-                  .lineLimit(1)
-                  .frame(width: 82)
+      ScrollViewReader { categoryProxy in
+        ScrollView(.horizontal, showsIndicators: false) {
+          HStack(spacing: 6) {
+            ForEach(availableFamilies) { family in
+              Button {
+                selectedLayoutFamily = family
+              } label: {
+                Label(family.title, systemImage: family.symbol)
+                  .font(.caption.weight(.medium))
+                  .padding(.horizontal, 9)
+                  .frame(height: 30)
+                  .foregroundStyle(displayedFamily == family ? Color.white : Color.primary)
+                  .background(
+                    displayedFamily == family
+                      ? Color.indigo : Color(uiColor: .secondarySystemBackground),
+                    in: Capsule()
+                  )
               }
+              .buttonStyle(.plain)
+              .accessibilityAddTraits(displayedFamily == family ? .isSelected : [])
+              .id(family)
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel(template.title)
-            .accessibilityAddTraits(selectedTemplate.id == template.id ? .isSelected : [])
+          }
+          .padding(.vertical, 2)
+        }
+        .onAppear {
+          categoryProxy.scrollTo(displayedFamily, anchor: .center)
+        }
+        .onChange(of: displayedFamily) { _, family in
+          withAnimation(.easeInOut(duration: 0.2)) {
+            categoryProxy.scrollTo(family, anchor: .center)
           }
         }
-        .padding(.vertical, 2)
       }
 
-      Text(
-        displayedFamily == .hero
-          ? "All distinct Featured layouts are shown and ranked for these photos."
-          : "Ranked for these photos. Layouts that would crop too much are hidden."
-      )
-      .font(.caption2)
-      .foregroundStyle(.secondary)
+      ScrollViewReader { layoutProxy in
+        ScrollView(.horizontal, showsIndicators: false) {
+          LazyHStack(spacing: 9) {
+            ForEach(familyLayouts) { template in
+              Button {
+                selectLayout(template)
+              } label: {
+                VStack(spacing: 4) {
+                  LayoutThumbnail(
+                    template: selectedTemplate.id == template.id ? selectedTemplate : template,
+                    task: draft,
+                    isSelected: selectedTemplate.id == template.id
+                  )
+                  Text(template.title)
+                    .font(.caption2)
+                    .lineLimit(1)
+                    .frame(width: 82)
+                }
+              }
+              .buttonStyle(.plain)
+              .accessibilityLabel(template.title)
+              .accessibilityAddTraits(selectedTemplate.id == template.id ? .isSelected : [])
+              .id(template.id)
+            }
+          }
+          .padding(.vertical, 2)
+        }
+        .onAppear {
+          if familyLayouts.contains(where: { $0.id == selectedTemplate.id }) {
+            layoutProxy.scrollTo(selectedTemplate.id, anchor: .center)
+          }
+        }
+        .onChange(of: selectedTemplate.id) { _, templateID in
+          if familyLayouts.contains(where: { $0.id == templateID }) {
+            withAnimation(.easeInOut(duration: 0.2)) {
+              layoutProxy.scrollTo(templateID, anchor: .center)
+            }
+          }
+        }
+      }
     }
   }
 
@@ -869,8 +1098,6 @@ struct CollageEditorView: View {
         draft.layout = legacyLayout
       } else if case .naturalVerticalStrip = template.recipe {
         draft.layout = .verticalStrip
-      } else {
-        draft.layout = .smartGrid
       }
       resetLayoutDividerSizes()
       refitPhotosForCurrentLayout()
@@ -1082,9 +1309,9 @@ struct CollageEditorView: View {
   private func importPhotos(_ items: [PhotosPickerItem]) {
     isImporting = true
     pickerItems = []
-    let wasEmpty = draft.photos.isEmpty
     Task {
       var failures = 0
+      var didImportPhotos = false
       for batchStart in stride(from: 0, to: items.count, by: 2) {
         let indexes = Array(batchStart..<min(batchStart + 2, items.count))
         let outcomes = await withTaskGroup(of: (Int, CollagePhoto?).self) { group in
@@ -1115,16 +1342,15 @@ struct CollageEditorView: View {
         let importedPhotos = outcomes.compactMap(\.1)
         failures += outcomes.count - importedPhotos.count
         if !importedPhotos.isEmpty {
+          didImportPhotos = true
           draft.clearLayoutCustomization(invalidateExport: true)
           draft.clearCustomLayout()
           draft.clearSavedLayoutSnapshot()
           draft.photos.append(contentsOf: importedPhotos)
         }
       }
-      if wasEmpty && !draft.photos.isEmpty {
+      if didImportPhotos {
         applyAutomaticRecommendations()
-      } else {
-        normalizeLayoutSelection()
       }
       isImporting = false
       if failures > 0 {
@@ -1142,9 +1368,12 @@ struct CollageEditorView: View {
     draft.clearSavedLayoutSnapshot()
     let recommendation = LayoutEngine.recommendedCanvasAndTemplate(for: draft)
     draft.canvas = recommendation.canvas
-    draft.layout = .smartGrid
+    if let legacyLayout = recommendation.template.legacyLayout {
+      draft.layout = legacyLayout
+    }
     draft.layoutID = recommendation.template.id
-    selectedLayoutFamily = recommendation.template.family.browserFamily
+    draft.mainPhotoCount = LayoutEngine.mainPhotoCount(for: recommendation.template)
+    selectedLayoutFamily = .smart
   }
 
   private func removePhoto(id: UUID) {

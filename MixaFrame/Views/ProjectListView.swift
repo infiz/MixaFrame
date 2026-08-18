@@ -49,6 +49,7 @@ struct ProjectListView: View {
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity)
       .navigationTitle("MixaFrame")
+      .navigationBarTitleDisplayMode(.inline)
       .toolbar {
         ToolbarItem(placement: .topBarTrailing) {
           Button {

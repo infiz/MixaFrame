@@ -9,7 +9,6 @@ struct CollagePreview: View {
   let onAdjustCrop: (UUID, CGPoint) -> Void
   let onAdjustZoom: (UUID, Double) -> Void
 
-  var showsLayoutDividers = false
   var onAdjustLayoutDivider: (LayoutDivider, Double) -> Void = { _, _ in }
   var maximumHeight: CGFloat = 480
 
@@ -47,7 +46,6 @@ struct CollagePreview: View {
               onAdjustCrop: onAdjustCrop,
               onAdjustZoom: onAdjustZoom,
               onManipulationChanged: { isManipulatingPhoto = $0 },
-              showsLayoutDividers: showsLayoutDividers,
               onAdjustLayoutDivider: onAdjustLayoutDivider
             )
             .frame(width: width, height: height)
@@ -68,7 +66,6 @@ struct CollagePreview: View {
             onAdjustCrop: onAdjustCrop,
             onAdjustZoom: onAdjustZoom,
             onManipulationChanged: { isManipulatingPhoto = $0 },
-            showsLayoutDividers: showsLayoutDividers,
             onAdjustLayoutDivider: onAdjustLayoutDivider
           )
           .frame(width: canvasSize.width, height: canvasSize.height)
@@ -178,7 +175,7 @@ private struct PassiveCollageCanvas: View {
     )
     .background {
       if !task.outputFormat.supportsTransparency {
-        Color.white
+        Color(uiColor: UIColor(hex: task.backgroundHex))
       }
     }
     .clipped()
@@ -194,11 +191,11 @@ private struct CollageCanvasContent: View {
   let onAdjustCrop: (UUID, CGPoint) -> Void
   let onAdjustZoom: (UUID, Double) -> Void
   let onManipulationChanged: (Bool) -> Void
-  let showsLayoutDividers: Bool
   let onAdjustLayoutDivider: (LayoutDivider, Double) -> Void
 
   @State private var swapTargetPhotoID: UUID?
   @State private var swapDragPreview: PhotoSwapDragState?
+  @State private var isDraggingLayoutDivider = false
 
   var body: some View {
     let outputSize = LayoutEngine.outputSize(for: task)
@@ -224,25 +221,37 @@ private struct CollageCanvasContent: View {
             frameSize: frame.size,
             onViewPhoto: { onViewPhoto(photo.id) },
             onSwapDragChanged: { location in
-              swapDragPreview = PhotoSwapDragState(photoID: photo.id, location: location)
-              swapTargetPhotoID = swapTarget(
+              guard !isDraggingLayoutDivider else { return }
+              let newTargetPhotoID = swapTarget(
                 at: location,
                 excluding: photo.id,
                 frames: sourceFrames,
                 scaleX: scaleX,
                 scaleY: scaleY
               )
+              if newTargetPhotoID != nil, newTargetPhotoID != swapTargetPhotoID {
+                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+              }
+              swapTargetPhotoID = newTargetPhotoID
+              swapDragPreview = newTargetPhotoID == nil
+                ? nil : PhotoSwapDragState(photoID: photo.id, location: location)
             },
             onSwapDragEnded: {
-              let targetPhotoID = swapTargetPhotoID
+              let targetPhotoID = isDraggingLayoutDivider ? nil : swapTargetPhotoID
               swapTargetPhotoID = nil
               swapDragPreview = nil
               if let targetPhotoID {
                 onMovePhoto(photo.id, targetPhotoID)
               }
             },
-            onAdjustCrop: { onAdjustCrop(photo.id, $0) },
-            onAdjustZoom: { onAdjustZoom(photo.id, $0) },
+            onAdjustCrop: { focalPoint in
+              guard !isDraggingLayoutDivider else { return }
+              onAdjustCrop(photo.id, focalPoint)
+            },
+            onAdjustZoom: { zoom in
+              guard !isDraggingLayoutDivider else { return }
+              onAdjustZoom(photo.id, zoom)
+            },
             onManipulationChanged: onManipulationChanged
           )
           .frame(width: frame.width, height: frame.height)
@@ -252,23 +261,33 @@ private struct CollageCanvasContent: View {
         }
       }
 
-      if showsLayoutDividers {
-        ForEach(LayoutEngine.layoutDividers(for: task, in: outputSize)) { divider in
-          let displayDivider = LayoutDivider(
-            axis: divider.axis,
-            rowIndex: divider.rowIndex,
-            dividerIndex: divider.dividerIndex,
-            start: CGPoint(x: divider.start.x * scaleX, y: divider.start.y * scaleY),
-            end: CGPoint(x: divider.end.x * scaleX, y: divider.end.y * scaleY)
-          )
-          LayoutDividerHandle(divider: displayDivider) { delta in
+      ForEach(LayoutEngine.layoutDividers(for: task, in: outputSize)) { divider in
+        let displayDivider = LayoutDivider(
+          axis: divider.axis,
+          rowIndex: divider.rowIndex,
+          dividerIndex: divider.dividerIndex,
+          start: CGPoint(x: divider.start.x * scaleX, y: divider.start.y * scaleY),
+          end: CGPoint(x: divider.end.x * scaleX, y: divider.end.y * scaleY)
+        )
+        LayoutDividerHandle(
+          divider: displayDivider,
+          sourceDivider: divider,
+          onMove: { draggedDivider, delta in
             let dimension =
-              displayDivider.axis == .horizontal ? displaySize.height : displaySize.width
-            onAdjustLayoutDivider(divider, Double(delta / max(dimension, 1)))
+              draggedDivider.axis == .horizontal ? displaySize.height : displaySize.width
+            onAdjustLayoutDivider(draggedDivider, Double(delta / max(dimension, 1)))
+          },
+          onDraggingChanged: { isDragging in
+            isDraggingLayoutDivider = isDragging
+            if isDragging {
+              swapTargetPhotoID = nil
+              swapDragPreview = nil
+            }
+            onManipulationChanged(isDragging)
           }
-          .frame(width: displaySize.width, height: displaySize.height)
-          .zIndex(9_000)
-        }
+        )
+        .frame(width: displaySize.width, height: displaySize.height)
+        .zIndex(9_000)
       }
 
       if let swapDragPreview,
@@ -306,7 +325,7 @@ private struct CollageCanvasContent: View {
     )
     .background {
       if !task.outputFormat.supportsTransparency {
-        Color.white
+        Color(uiColor: UIColor(hex: task.backgroundHex))
       }
     }
     .clipped()
@@ -396,30 +415,17 @@ private struct CollageCanvasContent: View {
 
 private struct LayoutDividerHandle: View {
   let divider: LayoutDivider
-  let onMove: (CGFloat) -> Void
+  let sourceDivider: LayoutDivider
+  let onMove: (LayoutDivider, CGFloat) -> Void
+  let onDraggingChanged: (Bool) -> Void
 
+  @State private var draggedDivider: LayoutDivider?
   @State private var lastDragLocation: CGPoint?
 
   var body: some View {
-    ZStack {
-      dividerPath
-        .stroke(.white.opacity(0.9), style: StrokeStyle(lineWidth: 5, lineCap: .round))
-      dividerPath
-        .stroke(.indigo, style: StrokeStyle(lineWidth: 2, lineCap: .round))
-      dividerPath
-        .stroke(Color.black.opacity(0.001), style: StrokeStyle(lineWidth: 30, lineCap: .round))
-        .gesture(dragGesture)
-
-      Image(systemName: divider.axis == .horizontal ? "arrow.up.and.down" : "arrow.left.and.right")
-        .font(.system(size: 13, weight: .bold))
-        .foregroundStyle(.white)
-        .frame(width: 32, height: 32)
-        .background(.indigo, in: Circle())
-        .overlay { Circle().stroke(.white, lineWidth: 2) }
-        .shadow(color: .black.opacity(0.3), radius: 4, y: 2)
-        .position(divider.midpoint)
-        .gesture(dragGesture)
-    }
+    dividerPath
+      .stroke(Color.black.opacity(0.001), style: StrokeStyle(lineWidth: 30, lineCap: .round))
+      .gesture(dragGesture)
     .accessibilityElement(children: .ignore)
     .accessibilityLabel(
       divider.axis == .horizontal ? "Resize adjacent rows" : "Resize adjacent columns"
@@ -438,16 +444,24 @@ private struct LayoutDividerHandle: View {
     DragGesture(minimumDistance: 0, coordinateSpace: .named("collageCanvas"))
       .onChanged { value in
         guard let lastDragLocation else {
+          draggedDivider = sourceDivider
           self.lastDragLocation = value.location
+          onDraggingChanged(true)
           return
         }
         let delta =
           divider.axis == .horizontal
           ? value.location.y - lastDragLocation.y : value.location.x - lastDragLocation.x
         self.lastDragLocation = value.location
-        onMove(delta)
+        if let draggedDivider {
+          onMove(draggedDivider, delta)
+        }
       }
-      .onEnded { _ in lastDragLocation = nil }
+      .onEnded { _ in
+        draggedDivider = nil
+        lastDragLocation = nil
+        onDraggingChanged(false)
+      }
   }
 }
 
@@ -468,8 +482,6 @@ private struct InteractivePhotoFrame: View {
   let onManipulationChanged: (Bool) -> Void
 
   @State private var dragStart: CGPoint?
-  @State private var touchBeganAt: Date?
-  @State private var dragMode: PhotoDragMode?
   @State private var zoomStart: Double?
   @State private var isManipulating = false
 
@@ -523,40 +535,25 @@ private struct InteractivePhotoFrame: View {
     .simultaneousGesture(zoomGesture)
     .accessibilityHint(
       usesAspectFit
-        ? "Double tap to view the original photo. Touch and hold, then drag to swap."
-        : "Double tap to view the original photo. Hold briefly, then drag to reposition; pinch to zoom; or hold longer to swap."
+        ? "Double tap to view the original photo. Drag onto another photo to swap."
+        : "Double tap to view the original photo. Drag to reposition, move onto another photo to swap, or pinch to zoom."
     )
   }
 
   private var photoDragGesture: some Gesture {
-    DragGesture(minimumDistance: 0, coordinateSpace: .named("collageCanvas"))
+    DragGesture(minimumDistance: 3, coordinateSpace: .named("collageCanvas"))
       .onChanged { value in
-        if touchBeganAt == nil {
-          touchBeganAt = Date()
-          dragStart = CGPoint(x: photo.focalX, y: photo.focalY)
-        }
         guard zoomStart == nil else { return }
-        let travel = hypot(value.translation.width, value.translation.height)
-        guard travel >= 3 else { return }
-
-        if dragMode == nil {
-          let heldDuration = Date().timeIntervalSince(touchBeganAt ?? Date())
-          if usesAspectFit || heldDuration >= 0.72 {
-            guard heldDuration >= 0.72 else { return }
-            dragMode = .swap
-            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-          } else {
-            guard heldDuration >= 0.12 else { return }
-            dragMode = .crop
-            UIImpactFeedbackGenerator(style: .light).impactOccurred()
-          }
+        if dragStart == nil {
+          dragStart = CGPoint(x: photo.focalX, y: photo.focalY)
           isManipulating = true
           onManipulationChanged(true)
+          UIImpactFeedbackGenerator(style: .light).impactOccurred()
         }
 
-        switch dragMode {
-        case .crop:
-          guard let dragStart else { return }
+        onSwapDragChanged(value.location)
+
+        if !usesAspectFit, let dragStart {
           let imageWidth = max(CGFloat(photo.pixelWidth), 1)
           let imageHeight = max(CGFloat(photo.pixelHeight), 1)
           let zoom = max(CGFloat(photo.effectiveZoom), 1)
@@ -580,19 +577,11 @@ private struct InteractivePhotoFrame: View {
             ) > 0.000_001
           else { return }
           onAdjustCrop(focalPoint)
-        case .swap:
-          onSwapDragChanged(value.location)
-        case nil:
-          break
         }
       }
       .onEnded { _ in
-        if dragMode == .swap {
-          onSwapDragEnded()
-        }
+        onSwapDragEnded()
         dragStart = nil
-        touchBeganAt = nil
-        dragMode = nil
         isManipulating = false
         onManipulationChanged(false)
       }
@@ -616,11 +605,6 @@ private struct InteractivePhotoFrame: View {
         onManipulationChanged(false)
       }
   }
-}
-
-private enum PhotoDragMode {
-  case crop
-  case swap
 }
 
 private struct PhotoSwapDragState {

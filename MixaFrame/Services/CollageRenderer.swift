@@ -102,7 +102,7 @@ enum CollageRenderer {
     includesWatermark: Bool
   ) {
     if !task.outputFormat.supportsTransparency {
-      UIColor.white.setFill()
+      UIColor(hex: task.backgroundHex).setFill()
       context.fill(canvasRect)
     } else {
       context.cgContext.clear(canvasRect)

@@ -10,15 +10,13 @@ struct CollageProject: Identifiable, Codable, Hashable {
 }
 
 struct CollageTask: Identifiable, Codable, Hashable {
-  static let defaultName = "Untitled Collage"
-
   var id = UUID()
   var projectID: UUID
   var name: String
   var createdAt = Date()
   var modifiedAt = Date()
   var photos: [CollagePhoto] = []
-  var layout: CollageLayout = .smartGrid
+  var layout: CollageLayout = .staggered
   var layoutID: String?
   var mainPhotoCount: Int?
   var isPhotoOrderManuallyAdjusted: Bool?
@@ -44,7 +42,7 @@ struct CollageTask: Identifiable, Codable, Hashable {
   }
 
   var titleForEditing: String {
-    name == Self.defaultName ? "" : name
+    name
   }
 
   var background: CollageBackground {
@@ -79,7 +77,7 @@ struct CollageTask: Identifiable, Codable, Hashable {
   static func new(projectID: UUID) -> CollageTask {
     CollageTask(
       projectID: projectID,
-      name: defaultName,
+      name: "",
       cornerRadiusPercent: 0
     )
   }
@@ -416,7 +414,6 @@ enum FocusSource: String, Codable, CaseIterable {
 }
 
 enum CollageLayout: String, Codable, CaseIterable, Identifiable {
-  case smartGrid
   case featuredTop
   case featuredBottom
   case featuredLeft
@@ -430,7 +427,6 @@ enum CollageLayout: String, Codable, CaseIterable, Identifiable {
 
   var title: String {
     switch self {
-    case .smartGrid: "Smart Grid"
     case .featuredTop: "Hero Top"
     case .featuredBottom: "Hero Bottom"
     case .featuredLeft: "Hero Left"
@@ -444,7 +440,6 @@ enum CollageLayout: String, Codable, CaseIterable, Identifiable {
 
   var symbol: String {
     switch self {
-    case .smartGrid: "square.grid.2x2"
     case .featuredTop: "rectangle.tophalf.inset.filled"
     case .featuredBottom: "rectangle.bottomhalf.inset.filled"
     case .featuredLeft: "rectangle.lefthalf.inset.filled"
