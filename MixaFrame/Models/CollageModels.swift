@@ -225,12 +225,21 @@ extension CollageTask {
   mutating func resetPhotosForAutomaticFit() {
     isPhotoOrderManuallyAdjusted = false
     for index in photos.indices {
-      let detectedArea = photos[index].detectedFocusArea?.rect
-      photos[index].focalX = detectedArea.map { Double($0.midX) } ?? 0.5
-      photos[index].focalY = detectedArea.map { Double($0.midY) } ?? 0.5
-      photos[index].focusSource = .automatic
-      photos[index].zoom = nil
+      photos[index].resetForAutomaticFit()
     }
+  }
+
+  @discardableResult
+  mutating func swapPhotosForAutomaticFit(sourceID: UUID, targetID: UUID) -> Bool {
+    guard sourceID != targetID,
+      let sourceIndex = photos.firstIndex(where: { $0.id == sourceID }),
+      let targetIndex = photos.firstIndex(where: { $0.id == targetID })
+    else { return false }
+    photos.swapAt(sourceIndex, targetIndex)
+    photos[sourceIndex].resetForAutomaticFit()
+    photos[targetIndex].resetForAutomaticFit()
+    isPhotoOrderManuallyAdjusted = true
+    return true
   }
 }
 
@@ -344,6 +353,14 @@ struct CollagePhoto: Identifiable, Codable, Hashable {
 
   var effectiveZoom: Double {
     max(1, min(zoom ?? 1, 4))
+  }
+
+  mutating func resetForAutomaticFit() {
+    let detectedArea = detectedFocusArea?.rect
+    focalX = detectedArea.map { Double($0.midX) } ?? 0.5
+    focalY = detectedArea.map { Double($0.midY) } ?? 0.5
+    focusSource = .automatic
+    zoom = nil
   }
 }
 

@@ -943,6 +943,47 @@ final class LayoutEngineTests: XCTestCase {
     XCTAssertTrue(task.photos.allSatisfy { $0.zoom == nil })
   }
 
+  func testSwappingPhotosAutomaticallyRefitsBothCrops() throws {
+    let firstID = UUID()
+    let secondID = UUID()
+    var task = CollageTask.new(projectID: UUID())
+    task.photos = [
+      CollagePhoto(
+        id: firstID,
+        fileName: "first",
+        pixelWidth: 2000,
+        pixelHeight: 1000,
+        focalX: 0.1,
+        focalY: 0.9,
+        focusSource: .manual,
+        detectedFocusArea: PhotoFocusArea(CGRect(x: 0.6, y: 0.2, width: 0.2, height: 0.4)),
+        zoom: 3
+      ),
+      CollagePhoto(
+        id: secondID,
+        fileName: "second",
+        pixelWidth: 1000,
+        pixelHeight: 2000,
+        focalX: 0.8,
+        focalY: 0.1,
+        focusSource: .manual,
+        detectedFocusArea: PhotoFocusArea(CGRect(x: 0.1, y: 0.5, width: 0.4, height: 0.2)),
+        zoom: 2
+      ),
+    ]
+
+    XCTAssertTrue(task.swapPhotosForAutomaticFit(sourceID: firstID, targetID: secondID))
+
+    XCTAssertEqual(task.photos.map(\.id), [secondID, firstID])
+    XCTAssertEqual(task.photos[0].focalX, 0.3, accuracy: 0.0001)
+    XCTAssertEqual(task.photos[0].focalY, 0.6, accuracy: 0.0001)
+    XCTAssertEqual(task.photos[1].focalX, 0.7, accuracy: 0.0001)
+    XCTAssertEqual(task.photos[1].focalY, 0.4, accuracy: 0.0001)
+    XCTAssertTrue(task.photos.allSatisfy { $0.focusSource == .automatic })
+    XCTAssertTrue(task.photos.allSatisfy { $0.zoom == nil })
+    XCTAssertFalse(task.usesAutomaticPhotoArrangement)
+  }
+
   func testBestFitPlacementIsIndependentOfPickerOrder() throws {
     let highResolutionID = try XCTUnwrap(UUID(uuidString: "00000000-0000-0000-0000-000000000005"))
     let photos = [
