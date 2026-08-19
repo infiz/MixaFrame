@@ -83,10 +83,6 @@ struct CollageEditorView: View {
   private var saveCollageSheet: some View {
     NavigationStack {
       VStack(alignment: .leading, spacing: 14) {
-        Text("Save the editable collage, then export it to Photos or continue editing.")
-          .font(.subheadline)
-          .foregroundStyle(.secondary)
-
         Button {
           isSaveChoicePresented = false
           beginSaving(dismissAfterSave: false) {
@@ -133,7 +129,7 @@ struct CollageEditorView: View {
       .navigationTitle("Save Collage")
       .navigationBarTitleDisplayMode(.inline)
     }
-    .presentationDetents([.height(subscriptions.hasPremiumAccess ? 300 : 330)])
+    .presentationDetents([.height(subscriptions.hasPremiumAccess ? 250 : 280)])
     .presentationDragIndicator(.visible)
   }
 
@@ -742,10 +738,6 @@ struct CollageEditorView: View {
           )
         }
         .onMove(perform: movePhotos)
-      } footer: {
-        Text(
-          "Tap a photo row to view the original photo. Touch and hold a photo on the canvas, then drag it onto another frame to swap."
-        )
       }
 
     case .layout:
@@ -1427,12 +1419,8 @@ struct CollageEditorView: View {
 
   private func swapPhotos(sourceID: UUID, targetID: UUID) {
     lockCurrentAutomaticArrangement()
-    guard sourceID != targetID,
-      let sourceIndex = draft.photos.firstIndex(where: { $0.id == sourceID }),
-      let targetIndex = draft.photos.firstIndex(where: { $0.id == targetID })
-    else { return }
     withAnimation(.easeInOut(duration: 0.2)) {
-      draft.photos.swapAt(sourceIndex, targetIndex)
+      draft.swapPhotosForAutomaticFit(sourceID: sourceID, targetID: targetID)
     }
   }
 
