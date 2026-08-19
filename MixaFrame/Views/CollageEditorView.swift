@@ -1,6 +1,8 @@
+import CoreTransferable
 import PhotosUI
 import SwiftUI
 import UIKit
+import UniformTypeIdentifiers
 
 struct CollageEditorView: View {
   @EnvironmentObject private var store: AppStore
@@ -30,14 +32,28 @@ struct CollageEditorView: View {
   @State private var pendingPhotoLibraryExportMode: PhotoLibraryExportMode?
 
   init(projectID: UUID, task: CollageTask?) {
-    var initialTask = task ?? CollageTask.new(projectID: projectID)
-    MixaFrameExportPreferences.apply(to: &initialTask)
+    let initialTask = Self.initialDraft(projectID: projectID, task: task)
     _draft = State(initialValue: initialTask)
     _savedSnapshot = State(initialValue: initialTask)
     _isControlsHidden = State(initialValue: task != nil)
     _activeEditorTool = State(initialValue: .photos)
     _selectedLayoutFamily = State(
       initialValue: LayoutEngine.selectedTemplate(for: initialTask).family.browserFamily)
+  }
+
+  static func initialDraft(
+    projectID: UUID,
+    task: CollageTask?,
+    defaults: UserDefaults = .standard
+  ) -> CollageTask {
+    if let task { return task }
+    var draft = CollageTask.new(projectID: projectID)
+    MixaFrameExportPreferences.apply(to: &draft, defaults: defaults)
+    return draft
+  }
+
+  private var exportPreferenceSnapshot: ExportPreferenceSnapshot {
+    ExportPreferenceSnapshot(task: draft)
   }
 
   var body: some View {
@@ -139,13 +155,13 @@ struct CollageEditorView: View {
 
         ZStack(alignment: .trailing) {
           previewWorkspace(maximumHeight: previewMaximumHeight(for: proxy.size))
-          .frame(width: workspaceWidth)
-          .frame(
-            maxWidth: .infinity,
-            maxHeight: .infinity,
-            alignment: isLandscapeEditing ? .leading : .top
-          )
-          .animation(.easeInOut(duration: 0.22), value: activeEditorTool)
+            .frame(width: workspaceWidth)
+            .frame(
+              maxWidth: .infinity,
+              maxHeight: .infinity,
+              alignment: isLandscapeEditing ? .leading : .top
+            )
+            .animation(.easeInOut(duration: 0.22), value: activeEditorTool)
 
           if isControlsHidden {
             fullCanvasRestoreButton
@@ -159,13 +175,8 @@ struct CollageEditorView: View {
         .clipped()
       }
       .background(Color(uiColor: .systemGroupedBackground))
-      .onChange(of: draft) { _, updatedDraft in
-        MixaFrameExportPreferences.save(outputFormat: updatedDraft.outputFormat)
-        MixaFrameExportPreferences.save(quality: updatedDraft.quality)
-        MixaFrameExportPreferences.save(outputMaxDimension: updatedDraft.outputMaxDimension)
-        MixaFrameExportPreferences.save(background: updatedDraft.background)
-        MixaFrameExportPreferences.save(spacing: updatedDraft.spacing)
-        MixaFrameExportPreferences.save(canvasCornerRadius: updatedDraft.canvasCornerRadius)
+      .onChange(of: exportPreferenceSnapshot) { _, updatedPreferences in
+        updatedPreferences.save()
       }
       .navigationTitle(draft.name)
       .navigationBarTitleDisplayMode(.inline)
@@ -322,13 +333,18 @@ struct CollageEditorView: View {
           }
         }
         Button("Discard Changes", role: .destructive) {
-          store.discardUnsavedPhotoFiles(from: draft)
-          dismiss()
+          let discardedDraft = draft
+          Task {
+            await store.discardUnsavedPhotoFiles(from: discardedDraft)
+            dismiss()
+          }
         }
         Button("Cancel", role: .cancel) {}
       } message: {
         if draft.photos.count >= 2 {
-          Text("This collage has unsaved changes. Save it and choose whether to export, or discard the changes.")
+          Text(
+            "This collage has unsaved changes. Save it and choose whether to export, or discard the changes."
+          )
         } else {
           Text("Add at least two photos to save this collage task, or discard it and go back.")
         }
@@ -900,7 +916,7 @@ struct CollageEditorView: View {
                 if subscriptions.hasPremiumAccess {
                   Image(systemName: "crown.fill")
                     .foregroundStyle(.green)
-                  .accessibilityLabel("Premium active")
+                    .accessibilityLabel("Premium active")
                 }
               }
               .font(.subheadline.weight(.semibold))
@@ -1237,8 +1253,8 @@ struct CollageEditorView: View {
   }
 
   @discardableResult
-  private func saveDraft() -> Bool {
-    guard let savedDraft = store.saveTask(draft) else { return false }
+  private func saveDraft() async -> Bool {
+    guard let savedDraft = await store.saveTask(draft) else { return false }
     draft = savedDraft
     savedSnapshot = savedDraft
     return true
@@ -1255,7 +1271,7 @@ struct CollageEditorView: View {
       // Give SwiftUI a frame to present the progress overlay before thumbnail rendering begins.
       try? await Task.sleep(for: .milliseconds(80))
       await store.prepareDerivedImages(for: draft.photos)
-      guard saveDraft() else {
+      guard await saveDraft() else {
         isSaving = false
         return
       }
@@ -1320,13 +1336,18 @@ struct CollageEditorView: View {
             let assetIdentifier = item.itemIdentifier
             group.addTask {
               do {
-                guard let data = try await item.loadTransferable(type: Data.self) else {
+                guard
+                  let transferredFile = try await item.loadTransferable(
+                    type: ImportedPhotoFile.self
+                  )
+                else {
                   return (index, nil)
                 }
+                defer { try? FileManager.default.removeItem(at: transferredFile.url) }
                 return (
                   index,
-                  try await store.importPhotoData(
-                    data,
+                  try await store.importPhotoFile(
+                    at: transferredFile.url,
                     photoLibraryAssetIdentifier: assetIdentifier
                   )
                 )
@@ -1383,7 +1404,7 @@ struct CollageEditorView: View {
     draft.clearCustomLayout()
     draft.clearSavedLayoutSnapshot()
     if let removedPhoto {
-      store.discardPhotoIfUnreferenced(removedPhoto)
+      Task { await store.discardPhotoIfUnreferenced(removedPhoto) }
     }
     normalizeLayoutSelection()
   }
@@ -1528,7 +1549,7 @@ struct CollageEditorView: View {
         format: draft.outputFormat
       )
     }
-    _ = try persistPreparedExport(export)
+    _ = try await persistPreparedExport(export)
     try? FileManager.default.removeItem(at: export.fileURL)
     exportPreview = nil
     message = EditorMessage(
@@ -1538,17 +1559,17 @@ struct CollageEditorView: View {
   }
 
   private func sharePreparedExport(_ export: PreparedCollageExport) async throws {
-    let persistedURL = try persistPreparedExport(export)
+    let persistedURL = try await persistPreparedExport(export)
     try? FileManager.default.removeItem(at: export.fileURL)
     exportPreview = nil
     try? await Task.sleep(nanoseconds: 250_000_000)
     shareItem = ShareItem(url: persistedURL)
   }
 
-  private func persistPreparedExport(_ export: PreparedCollageExport) throws -> URL {
-    let persistedURL = try store.persistExport(from: export.fileURL, for: draft)
+  private func persistPreparedExport(_ export: PreparedCollageExport) async throws -> URL {
+    let persistedURL = try await store.persistExport(from: export.fileURL, for: draft)
     draft.latestExportFileName = persistedURL.lastPathComponent
-    guard saveDraft() else { throw AppError.persistenceFailed }
+    guard await saveDraft() else { throw AppError.persistenceFailed }
     return persistedURL
   }
 
@@ -1564,6 +1585,47 @@ struct CollageEditorView: View {
       from: nil,
       for: nil
     )
+  }
+}
+
+private struct ImportedPhotoFile: Transferable {
+  let url: URL
+
+  static var transferRepresentation: some TransferRepresentation {
+    FileRepresentation(importedContentType: .image) { receivedFile in
+      let temporaryURL = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString)
+        .appendingPathExtension(receivedFile.file.pathExtension)
+      try FileManager.default.copyItem(at: receivedFile.file, to: temporaryURL)
+      return ImportedPhotoFile(url: temporaryURL)
+    }
+  }
+}
+
+private struct ExportPreferenceSnapshot: Equatable {
+  let outputFormat: OutputFormat
+  let quality: OutputQuality
+  let outputMaxDimension: Int
+  let background: CollageBackground
+  let spacing: Double
+  let canvasCornerRadius: Double
+
+  init(task: CollageTask) {
+    outputFormat = task.outputFormat
+    quality = task.quality
+    outputMaxDimension = task.outputMaxDimension
+    background = task.background
+    spacing = task.spacing
+    canvasCornerRadius = task.canvasCornerRadius
+  }
+
+  func save() {
+    MixaFrameExportPreferences.save(outputFormat: outputFormat)
+    MixaFrameExportPreferences.save(quality: quality)
+    MixaFrameExportPreferences.save(outputMaxDimension: outputMaxDimension)
+    MixaFrameExportPreferences.save(background: background)
+    MixaFrameExportPreferences.save(spacing: spacing)
+    MixaFrameExportPreferences.save(canvasCornerRadius: canvasCornerRadius)
   }
 }
 

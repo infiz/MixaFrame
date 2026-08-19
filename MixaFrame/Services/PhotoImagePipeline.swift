@@ -24,8 +24,46 @@ enum PhotoImagePipeline {
     previewURL: URL,
     thumbnailURL: URL
   ) throws -> ImportedPhotoAsset {
-    do {
+    try importPhoto(
+      id: id,
+      photoLibraryAssetIdentifier: photoLibraryAssetIdentifier,
+      originalURL: originalURL,
+      previewURL: previewURL,
+      thumbnailURL: thumbnailURL
+    ) {
       try data.write(to: originalURL, options: .atomic)
+    }
+  }
+
+  static func importPhoto(
+    fileURL: URL,
+    id: UUID,
+    photoLibraryAssetIdentifier: String? = nil,
+    originalURL: URL,
+    previewURL: URL,
+    thumbnailURL: URL
+  ) throws -> ImportedPhotoAsset {
+    try importPhoto(
+      id: id,
+      photoLibraryAssetIdentifier: photoLibraryAssetIdentifier,
+      originalURL: originalURL,
+      previewURL: previewURL,
+      thumbnailURL: thumbnailURL
+    ) {
+      try FileManager.default.copyItem(at: fileURL, to: originalURL)
+    }
+  }
+
+  private static func importPhoto(
+    id: UUID,
+    photoLibraryAssetIdentifier: String?,
+    originalURL: URL,
+    previewURL: URL,
+    thumbnailURL: URL,
+    writeOriginal: () throws -> Void
+  ) throws -> ImportedPhotoAsset {
+    do {
+      try writeOriginal()
       guard let source = CGImageSourceCreateWithURL(originalURL as CFURL, nil) else {
         throw AppError.invalidImage
       }

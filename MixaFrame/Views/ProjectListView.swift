@@ -14,7 +14,9 @@ struct ProjectListView: View {
   var body: some View {
     NavigationStack {
       Group {
-        if store.projects.isEmpty {
+        if !store.isLoaded {
+          ProgressView("Loading projects…")
+        } else if store.projects.isEmpty {
           ContentUnavailableView {
             Label("No Projects", systemImage: "rectangle.stack.badge.plus")
           } description: {
@@ -74,6 +76,7 @@ struct ProjectListView: View {
           } label: {
             Label("New Project", systemImage: "plus")
           }
+          .disabled(!store.isLoaded)
         }
         ToolbarItemGroup(placement: .keyboard) {
           Spacer()
@@ -88,8 +91,9 @@ struct ProjectListView: View {
         TextField("Project name", text: $newProjectName)
         Button("Cancel", role: .cancel) { newProjectName = "" }
         Button("Create") {
-          _ = store.createProject(name: newProjectName)
+          let name = newProjectName
           newProjectName = ""
+          Task { _ = await store.createProject(name: name) }
         }
       } message: {
         Text("Projects keep related collage tasks together.")
@@ -99,7 +103,9 @@ struct ProjectListView: View {
         Button("Cancel", role: .cancel) { projectToRename = nil }
         Button("Save") {
           if let projectToRename {
-            store.renameProject(id: projectToRename.id, name: renameText)
+            let projectID = projectToRename.id
+            let name = renameText
+            Task { await store.renameProject(id: projectID, name: name) }
           }
           projectToRename = nil
         }
@@ -110,7 +116,9 @@ struct ProjectListView: View {
         titleVisibility: .visible
       ) {
         Button("Delete Project and Its Tasks", role: .destructive) {
-          if let projectToDelete { store.deleteProject(id: projectToDelete.id) }
+          if let projectToDelete {
+            Task { await store.deleteProject(id: projectToDelete.id) }
+          }
           projectToDelete = nil
         }
         Button("Cancel", role: .cancel) { projectToDelete = nil }

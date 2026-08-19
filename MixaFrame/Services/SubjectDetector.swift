@@ -9,16 +9,16 @@ struct SubjectDetection: Sendable {
 enum SubjectDetector {
   static func detect(in image: CGImage) -> SubjectDetection {
     let faceRequest = VNDetectFaceRectanglesRequest()
-    let saliencyRequest = VNGenerateAttentionBasedSaliencyImageRequest()
-    let handler = VNImageRequestHandler(cgImage: image, orientation: .up)
 
     do {
-      try handler.perform([faceRequest, saliencyRequest])
+      try VNImageRequestHandler(cgImage: image, orientation: .up).perform([faceRequest])
 
       if let faces = faceRequest.results, !faces.isEmpty {
         return detection(for: faces.map(\.boundingBox))
       }
 
+      let saliencyRequest = VNGenerateAttentionBasedSaliencyImageRequest()
+      try VNImageRequestHandler(cgImage: image, orientation: .up).perform([saliencyRequest])
       if let objects = saliencyRequest.results?.first?.salientObjects, !objects.isEmpty {
         return detection(for: Array(objects.prefix(4).map(\.boundingBox)))
       }
