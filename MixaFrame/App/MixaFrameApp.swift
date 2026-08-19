@@ -14,6 +14,7 @@ struct MixaFrameApp: App {
         .tint(.indigo)
         .onChange(of: scenePhase) { _, phase in
           guard phase == .active else { return }
+          store.resumeImageCacheLoading()
           Task { await subscriptions.refreshEntitlements() }
         }
     }

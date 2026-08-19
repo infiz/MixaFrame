@@ -9,7 +9,13 @@ struct PreparedCollageExport: Identifiable {
   let fileURL: URL
   let previewImage: UIImage
   let outputSize: CGSize
+  let requestedOutputSize: CGSize
   let includesWatermark: Bool
+
+  var wasScaledForSafety: Bool {
+    abs(outputSize.width - requestedOutputSize.width) >= 1
+      || abs(outputSize.height - requestedOutputSize.height) >= 1
+  }
 }
 
 enum CollageRenderer {
@@ -17,6 +23,19 @@ enum CollageRenderer {
   static let maximumSide: CGFloat = 32_000
   static let previewMaximumPixelCount: CGFloat = 8_000_000
   static let previewMaximumSide: CGFloat = 12_000
+
+  static func exportOutputSize(for task: CollageTask) -> CGSize {
+    let requestedSize = LayoutEngine.outputSize(for: task)
+    let pixelCount = max(1, requestedSize.width * requestedSize.height)
+    let pixelScale = sqrt(maximumPixelCount / pixelCount)
+    let sideScale = maximumSide / max(requestedSize.width, requestedSize.height, 1)
+    let scale = min(1, pixelScale, sideScale)
+    guard scale < 0.999_999 else { return requestedSize }
+    return CGSize(
+      width: max(1, floor(requestedSize.width * scale)),
+      height: max(1, floor(requestedSize.height * scale))
+    )
+  }
 
   static func renderThumbnail(
     task: CollageTask,
@@ -57,19 +76,25 @@ enum CollageRenderer {
     includesWatermark: Bool = false
   ) throws -> UIImage {
     guard task.photos.count >= 2 else { throw AppError.noPhotos }
-    let outputSize = LayoutEngine.outputSize(for: task)
-    guard outputSize.width <= maximumSide,
-      outputSize.height <= maximumSide,
-      outputSize.width * outputSize.height <= maximumPixelCount
-    else {
-      throw AppError.imageTooLarge
-    }
+    let requestedOutputSize = LayoutEngine.outputSize(for: task)
+    let outputSize = exportOutputSize(for: task)
 
     let format = UIGraphicsImageRendererFormat()
     format.scale = 1
     format.opaque = !task.outputFormat.supportsTransparency
     let renderer = UIGraphicsImageRenderer(size: outputSize, format: format)
-    let layoutFrames = LayoutEngine.layoutFrames(for: task, in: outputSize)
+    let scaleX = outputSize.width / max(requestedOutputSize.width, 1)
+    let scaleY = outputSize.height / max(requestedOutputSize.height, 1)
+    let layoutFrames = LayoutEngine.layoutFrames(for: task, in: requestedOutputSize).map { frame in
+      var scaledFrame = frame
+      scaledFrame.rect = CGRect(
+        x: frame.rect.minX * scaleX,
+        y: frame.rect.minY * scaleY,
+        width: frame.rect.width * scaleX,
+        height: frame.rect.height * scaleY
+      )
+      return scaledFrame
+    }
     var renderingError: Error?
     let image = renderer.image { context in
       let canvasRect = CGRect(origin: .zero, size: outputSize)
@@ -255,6 +280,7 @@ enum CollageRenderer {
   ) throws
     -> PreparedCollageExport
   {
+    let requestedOutputSize = LayoutEngine.outputSize(for: task)
     let image = try render(
       task: task,
       photoDirectory: photoDirectory,
@@ -265,6 +291,7 @@ enum CollageRenderer {
       fileURL: url,
       previewImage: exportPreviewImage(from: image),
       outputSize: image.size,
+      requestedOutputSize: requestedOutputSize,
       includesWatermark: includesWatermark
     )
   }

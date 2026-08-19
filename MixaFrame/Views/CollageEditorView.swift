@@ -27,7 +27,7 @@ struct CollageEditorView: View {
   @State private var showingSubscription = false
   @State private var pendingExportAction: PendingExportAction?
   @State private var isSaveChoicePresented = false
-  @State private var shouldPresentSubscriptionAfterSaveChoice = false
+  @State private var pendingExitAction: PendingExitAction?
   @State private var isPhotoExportChoicePresented = false
   @State private var pendingPhotoLibraryExportMode: PhotoLibraryExportMode?
 
@@ -58,7 +58,10 @@ struct CollageEditorView: View {
 
   var body: some View {
     editorContent
-      .sheet(isPresented: $isSaveChoicePresented, onDismiss: completeSaveChoiceDismissal) {
+      .sheet(isPresented: $isExitConfirmationPresented, onDismiss: completeExitAction) {
+        unsavedChangesSheet
+      }
+      .sheet(isPresented: $isSaveChoicePresented) {
         saveCollageSheet
       }
       .sheet(isPresented: $isPhotoExportChoicePresented, onDismiss: completePhotoExportChoice) {
@@ -80,6 +83,74 @@ struct CollageEditorView: View {
       }
   }
 
+  private var unsavedChangesSheet: some View {
+    NavigationStack {
+      VStack(alignment: .leading, spacing: 14) {
+        if draft.photos.count >= 2 {
+          Button {
+            chooseExitAction(.saveAndExport)
+          } label: {
+            Label("Save and Export", systemImage: "square.and.arrow.down")
+              .frame(maxWidth: .infinity)
+          }
+          .buttonStyle(.borderedProminent)
+          .controlSize(.large)
+        }
+
+        if !subscriptions.hasPremiumAccess {
+          Button {
+            chooseExitAction(.subscribe)
+          } label: {
+            HStack(spacing: 10) {
+              Label("Subscribe to remove the watermark", systemImage: "crown.fill")
+              Spacer(minLength: 8)
+              Image(systemName: "chevron.right")
+                .font(.caption.weight(.semibold))
+            }
+            .font(.subheadline.weight(.semibold))
+            .contentShape(Rectangle())
+          }
+          .buttonStyle(.plain)
+          .foregroundStyle(.indigo)
+          .accessibilityHint("Opens MixaFrame Premium subscription options")
+        }
+
+        if draft.photos.count >= 2 {
+          Button {
+            chooseExitAction(.saveAndLeave)
+          } label: {
+            Label("Save and Leave", systemImage: "rectangle.portrait.and.arrow.right")
+              .frame(maxWidth: .infinity)
+          }
+          .buttonStyle(.bordered)
+          .controlSize(.large)
+        }
+
+        Button(role: .destructive) {
+          chooseExitAction(.discard)
+        } label: {
+          Label("Discard Changes", systemImage: "trash")
+            .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.large)
+      }
+      .padding(20)
+      .frame(maxHeight: .infinity, alignment: .top)
+      .navigationTitle("Unsaved Changes")
+      .navigationBarTitleDisplayMode(.inline)
+      .toolbar {
+        ToolbarItem(placement: .cancellationAction) {
+          Button("Keep Editing", systemImage: "xmark") {
+            isExitConfirmationPresented = false
+          }
+        }
+      }
+    }
+    .presentationDetents([.height(subscriptions.hasPremiumAccess ? 300 : 350)])
+    .presentationDragIndicator(.visible)
+  }
+
   private var saveCollageSheet: some View {
     NavigationStack {
       VStack(alignment: .leading, spacing: 14) {
@@ -94,20 +165,6 @@ struct CollageEditorView: View {
         }
         .buttonStyle(.borderedProminent)
         .controlSize(.large)
-
-        if !subscriptions.hasPremiumAccess {
-          Button {
-            shouldPresentSubscriptionAfterSaveChoice = true
-            isSaveChoicePresented = false
-          } label: {
-            Label("Subscribe to remove the watermark", systemImage: "crown")
-              .font(.subheadline)
-              .frame(maxWidth: .infinity, alignment: .leading)
-          }
-          .buttonStyle(.plain)
-          .foregroundStyle(.indigo)
-          .disabled(!subscriptions.hasLoadedEntitlements)
-        }
 
         Button {
           isSaveChoicePresented = false
@@ -129,14 +186,34 @@ struct CollageEditorView: View {
       .navigationTitle("Save Collage")
       .navigationBarTitleDisplayMode(.inline)
     }
-    .presentationDetents([.height(subscriptions.hasPremiumAccess ? 250 : 280)])
+    .presentationDetents([.height(250)])
     .presentationDragIndicator(.visible)
   }
 
-  private func completeSaveChoiceDismissal() {
-    guard shouldPresentSubscriptionAfterSaveChoice else { return }
-    shouldPresentSubscriptionAfterSaveChoice = false
-    showingSubscription = true
+  private func chooseExitAction(_ action: PendingExitAction) {
+    pendingExitAction = action
+    isExitConfirmationPresented = false
+  }
+
+  private func completeExitAction() {
+    guard let action = pendingExitAction else { return }
+    pendingExitAction = nil
+    switch action {
+    case .saveAndExport:
+      beginSaving(dismissAfterSave: false) {
+        performExportAction(.saveToPhotos)
+      }
+    case .saveAndLeave:
+      beginSaving(dismissAfterSave: true)
+    case .discard:
+      let discardedDraft = draft
+      Task {
+        await store.discardUnsavedPhotoFiles(from: discardedDraft)
+        dismiss()
+      }
+    case .subscribe:
+      showingSubscription = true
+    }
   }
 
   private var editorContent: some View {
@@ -182,6 +259,7 @@ struct CollageEditorView: View {
           Button {
             hideKeyboard()
             if hasUnsavedChanges {
+              pendingExitAction = nil
               isExitConfirmationPresented = true
             } else {
               dismiss()
@@ -318,33 +396,6 @@ struct CollageEditorView: View {
           "This collage has changed since it was last saved. Save now so the exported image and saved task stay in sync."
         )
       }
-      .confirmationDialog(
-        "Save Changes?",
-        isPresented: $isExitConfirmationPresented,
-        titleVisibility: .visible
-      ) {
-        if draft.photos.count >= 2 {
-          Button("Save") {
-            presentSaveChoices()
-          }
-        }
-        Button("Discard Changes", role: .destructive) {
-          let discardedDraft = draft
-          Task {
-            await store.discardUnsavedPhotoFiles(from: discardedDraft)
-            dismiss()
-          }
-        }
-        Button("Cancel", role: .cancel) {}
-      } message: {
-        if draft.photos.count >= 2 {
-          Text(
-            "This collage has unsaved changes. Save it and choose whether to export, or discard the changes."
-          )
-        } else {
-          Text("Add at least two photos to save this collage task, or discard it and go back.")
-        }
-      }
     }
   }
 
@@ -425,13 +476,16 @@ struct CollageEditorView: View {
   }
 
   private func previewMaximumHeight(for availableSize: CGSize) -> CGFloat {
+    if LayoutEngine.flowAxis(for: draft) == .horizontal {
+      return max(140, availableSize.height * 0.5)
+    }
+
+    let defaultHeight: CGFloat
     if isControlsHidden {
-      return max(140, availableSize.height - 12)
-    }
-    if availableSize.width > availableSize.height {
-      return max(140, availableSize.height - 14)
-    }
-    if usesSquareCanvas {
+      defaultHeight = max(140, availableSize.height - 12)
+    } else if availableSize.width > availableSize.height {
+      defaultHeight = max(140, availableSize.height - 14)
+    } else if usesSquareCanvas {
       let fullWidthSquare = max(140, availableSize.width - 32)
       let heightBeforeControls = max(
         140,
@@ -439,9 +493,12 @@ struct CollageEditorView: View {
           - editorMinimumControlsHeight
           - editorPortraitReservedVerticalSpace
       )
-      return min(fullWidthSquare, heightBeforeControls)
+      defaultHeight = min(fullWidthSquare, heightBeforeControls)
+    } else {
+      defaultHeight = max(140, availableSize.height * 0.42)
     }
-    return max(140, availableSize.height * 0.42)
+
+    return defaultHeight
   }
 
   private func landscapePreviewWorkspaceWidth(for availableSize: CGSize) -> CGFloat {
@@ -695,16 +752,21 @@ struct CollageEditorView: View {
       }
     } label: {
       HStack(spacing: 3) {
-        Text("Ratio · \(canvasRatioLabel)")
-        Image(systemName: "chevron.down")
-          .font(.caption2.weight(.semibold))
+        Text(LayoutEngine.isFlowLayout(draft) ? "Ratio · Flow" : "Ratio · \(canvasRatioLabel)")
+        if !LayoutEngine.isFlowLayout(draft) {
+          Image(systemName: "chevron.down")
+            .font(.caption2.weight(.semibold))
+        }
       }
       .font(.subheadline.weight(.semibold))
       .lineLimit(1)
     }
-    .disabled(LayoutEngine.isNaturalVerticalStrip(draft))
+    .disabled(LayoutEngine.isFlowLayout(draft))
     .accessibilityLabel("Aspect Ratio")
-    .accessibilityValue(draft.canvas.title)
+    .accessibilityValue(
+      LayoutEngine.isFlowLayout(draft)
+        ? "Determined by the photos" : draft.canvas.title
+    )
   }
 
   private var canvasRatioLabel: String {
@@ -807,6 +869,8 @@ struct CollageEditorView: View {
 
     case .canvas:
       Section {
+        let requestedSize = LayoutEngine.outputSize(for: draft)
+        let safeExportSize = CollageRenderer.exportOutputSize(for: draft)
         VStack(alignment: .leading, spacing: 8) {
           Text("Resolution")
             .font(.subheadline.weight(.semibold))
@@ -877,6 +941,17 @@ struct CollageEditorView: View {
               .labelsHidden()
               .fixedSize()
             }
+          }
+
+          if abs(requestedSize.width - safeExportSize.width) >= 1
+            || abs(requestedSize.height - safeExportSize.height) >= 1
+          {
+            Label(
+              "The complete Flow strip will export at \(Int(safeExportSize.width)) × \(Int(safeExportSize.height)) px to fit safely.",
+              systemImage: "info.circle"
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
           }
         }
       }
@@ -1104,8 +1179,6 @@ struct CollageEditorView: View {
       }
       if let legacyLayout = template.legacyLayout {
         draft.layout = legacyLayout
-      } else if case .naturalVerticalStrip = template.recipe {
-        draft.layout = .verticalStrip
       }
       resetLayoutDividerSizes()
       refitPhotosForCurrentLayout()
@@ -1625,7 +1698,16 @@ private struct LayoutThumbnail: View {
   private let displaySize = CGSize(width: 76, height: 52)
 
   var body: some View {
-    let logicalSize = LayoutEngine.outputSize(for: task)
+    let logicalSize: CGSize = {
+      guard !isSelected else { return LayoutEngine.outputSize(for: task) }
+      var previewTask = task
+      previewTask.layoutID = template.id
+      previewTask.mainPhotoCount = LayoutEngine.mainPhotoCount(for: template)
+      previewTask.clearLayoutCustomization()
+      previewTask.clearCustomLayout()
+      previewTask.clearSavedLayoutSnapshot()
+      return LayoutEngine.outputSize(for: previewTask)
+    }()
     let frames = LayoutEngine.previewFrames(
       template: template,
       task: task,
@@ -1790,6 +1872,13 @@ private struct EditorMessage: Identifiable {
 private enum PendingExportAction {
   case preview
   case saveToPhotos
+}
+
+private enum PendingExitAction {
+  case saveAndExport
+  case saveAndLeave
+  case discard
+  case subscribe
 }
 
 private enum ExportDestination {

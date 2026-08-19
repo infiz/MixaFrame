@@ -451,7 +451,7 @@ enum CollageLayout: String, Codable, CaseIterable, Identifiable {
     case .staggered: "Staggered"
     case .rows: "Stacked Rows"
     case .columns: "Side-by-Side"
-    case .verticalStrip: "Full-Width Tall Strip"
+    case .verticalStrip: "Vertical Flow"
     }
   }
 
