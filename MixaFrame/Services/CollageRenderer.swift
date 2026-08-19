@@ -70,27 +70,42 @@ enum CollageRenderer {
     format.opaque = !task.outputFormat.supportsTransparency
     let renderer = UIGraphicsImageRenderer(size: outputSize, format: format)
     let layoutFrames = LayoutEngine.layoutFrames(for: task, in: outputSize)
-    let cgImages = try task.photos.map { photo -> CGImage in
-      let url = photoDirectory.appendingPathComponent(photo.fileName)
-      guard CGImageSourceCreateWithURL(url as CFURL, nil) != nil,
-        let image = UIImage(contentsOfFile: url.path),
-        let cgImage = image.normalizedCGImage
-      else {
-        throw AppError.imageMissing
-      }
-      return cgImage
-    }
+    var renderingError: Error?
+    let image = renderer.image { context in
+      let canvasRect = CGRect(origin: .zero, size: outputSize)
+      prepareCanvas(task: task, canvasRect: canvasRect, context: context)
 
-    return renderer.image { context in
-      draw(
-        task: task,
-        layoutFrames: layoutFrames,
-        images: cgImages.map(Optional.some),
-        canvasRect: CGRect(origin: .zero, size: outputSize),
-        context: context,
-        includesWatermark: includesWatermark
-      )
+      for index in task.photos.indices {
+        guard renderingError == nil, layoutFrames.indices.contains(index) else { break }
+        autoreleasepool {
+          do {
+            let photo = task.photos[index]
+            let layoutFrame = layoutFrames[index]
+            let url = photoDirectory.appendingPathComponent(photo.fileName)
+            let cgImage = try exportSourceImage(
+              for: photo,
+              layoutFrame: layoutFrame,
+              at: url
+            )
+            drawPhoto(
+              photo: photo,
+              layoutFrame: layoutFrame,
+              cgImage: cgImage,
+              context: context
+            )
+          } catch {
+            renderingError = error
+          }
+        }
+      }
+
+      if renderingError == nil, includesWatermark {
+        drawWatermark(in: canvasRect)
+      }
+      context.cgContext.restoreGState()
     }
+    if let renderingError { throw renderingError }
+    return image
   }
 
   private static func draw(
@@ -101,6 +116,31 @@ enum CollageRenderer {
     context: UIGraphicsImageRendererContext,
     includesWatermark: Bool
   ) {
+    prepareCanvas(task: task, canvasRect: canvasRect, context: context)
+
+    for index in task.photos.indices {
+      guard layoutFrames.indices.contains(index), images.indices.contains(index),
+        let cgImage = images[index]
+      else { continue }
+      drawPhoto(
+        photo: task.photos[index],
+        layoutFrame: layoutFrames[index],
+        cgImage: cgImage,
+        context: context
+      )
+    }
+
+    if includesWatermark {
+      drawWatermark(in: canvasRect)
+    }
+    context.cgContext.restoreGState()
+  }
+
+  private static func prepareCanvas(
+    task: CollageTask,
+    canvasRect: CGRect,
+    context: UIGraphicsImageRendererContext
+  ) {
     if !task.outputFormat.supportsTransparency {
       UIColor(hex: task.backgroundHex).setFill()
       context.fill(canvasRect)
@@ -109,41 +149,86 @@ enum CollageRenderer {
     }
 
     context.cgContext.saveGState()
-    defer { context.cgContext.restoreGState() }
     canvasClippingPath(for: task, in: canvasRect).addClip()
     UIColor(hex: task.backgroundHex).setFill()
     context.fill(canvasRect)
+  }
 
-    for index in task.photos.indices {
-      guard layoutFrames.indices.contains(index), images.indices.contains(index),
-        let cgImage = images[index]
-      else { continue }
-      let photo = task.photos[index]
-      let layoutFrame = layoutFrames[index]
-      let frame = layoutFrame.rect
-      context.cgContext.saveGState()
-      defer { context.cgContext.restoreGState() }
-      if layoutFrame.rotationDegrees != 0 {
-        context.cgContext.translateBy(x: frame.midX, y: frame.midY)
-        context.cgContext.rotate(by: layoutFrame.rotationDegrees * .pi / 180)
-        context.cgContext.translateBy(x: -frame.midX, y: -frame.midY)
-      }
-      clippingPath(for: layoutFrame).addClip()
-      if layoutFrame.usesAspectFit {
-        UIImage(cgImage: cgImage).draw(in: frame)
-      } else {
-        drawAspectFill(
-          cgImage: cgImage,
-          in: frame,
-          focalPoint: CGPoint(x: photo.focalX, y: photo.focalY),
-          zoom: CGFloat(photo.effectiveZoom)
-        )
-      }
+  private static func drawPhoto(
+    photo: CollagePhoto,
+    layoutFrame: LayoutFrame,
+    cgImage: CGImage,
+    context: UIGraphicsImageRendererContext
+  ) {
+    let frame = layoutFrame.rect
+    context.cgContext.saveGState()
+    defer { context.cgContext.restoreGState() }
+    if layoutFrame.rotationDegrees != 0 {
+      context.cgContext.translateBy(x: frame.midX, y: frame.midY)
+      context.cgContext.rotate(by: layoutFrame.rotationDegrees * .pi / 180)
+      context.cgContext.translateBy(x: -frame.midX, y: -frame.midY)
+    }
+    clippingPath(for: layoutFrame).addClip()
+    if layoutFrame.usesAspectFit {
+      UIImage(cgImage: cgImage).draw(in: frame)
+    } else {
+      drawAspectFill(
+        cgImage: cgImage,
+        in: frame,
+        focalPoint: CGPoint(x: photo.focalX, y: photo.focalY),
+        zoom: CGFloat(photo.effectiveZoom)
+      )
+    }
+  }
+
+  private static func exportSourceImage(
+    for photo: CollagePhoto,
+    layoutFrame: LayoutFrame,
+    at url: URL
+  ) throws -> CGImage {
+    guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else {
+      throw AppError.imageMissing
     }
 
-    if includesWatermark {
-      drawWatermark(in: canvasRect)
+    let maximumPixelSize = requiredSourceMaximumPixelSize(
+      for: photo,
+      layoutFrame: layoutFrame
+    )
+    let options: [CFString: Any] = [
+      kCGImageSourceCreateThumbnailFromImageAlways: true,
+      kCGImageSourceCreateThumbnailWithTransform: true,
+      kCGImageSourceThumbnailMaxPixelSize: maximumPixelSize,
+      kCGImageSourceShouldCacheImmediately: true,
+    ]
+    guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
+      throw AppError.invalidImage
     }
+    return image
+  }
+
+  static func requiredSourceMaximumPixelSize(
+    for photo: CollagePhoto,
+    layoutFrame: LayoutFrame
+  ) -> Int {
+    let frame = layoutFrame.rect
+    let cropRect =
+      layoutFrame.usesAspectFit
+      ? CGRect(x: 0, y: 0, width: 1, height: 1)
+      : PhotoCropGeometry.normalizedCropRect(
+        sourceAspectRatio: photo.aspectRatio,
+        destinationAspectRatio: frame.width / max(frame.height, 1),
+        focalPoint: CGPoint(x: photo.focalX, y: photo.focalY),
+        zoom: CGFloat(photo.effectiveZoom)
+      )
+    let requiredFullWidth = frame.width / max(cropRect.width, 0.000_1)
+    let requiredFullHeight = frame.height / max(cropRect.height, 0.000_1)
+    let maximumPixelSize = Int(
+      ceil(
+        min(
+          CGFloat(max(photo.pixelWidth, photo.pixelHeight)),
+          max(requiredFullWidth, requiredFullHeight) * 1.05))
+    )
+    return max(1, maximumPixelSize)
   }
 
   static func export(
@@ -197,8 +282,7 @@ enum CollageRenderer {
       date: date
     )
     let url = FileManager.default.temporaryDirectory.appendingPathComponent(fileName)
-    let data = try encodedData(for: image, format: task.outputFormat, quality: task.quality)
-    try data.write(to: url, options: .atomic)
+    try writeEncodedImage(image, to: url, format: task.outputFormat, quality: task.quality)
     return url
   }
 
@@ -260,8 +344,9 @@ enum CollageRenderer {
       )
     }
 
-    guard let asset = PHAsset.fetchAssets(withLocalIdentifiers: [identifier], options: nil)
-      .firstObject
+    guard
+      let asset = PHAsset.fetchAssets(withLocalIdentifiers: [identifier], options: nil)
+        .firstObject
     else {
       throw photoLibraryError(
         "The previously exported photo is no longer available. Choose Create New Photo instead."
@@ -323,55 +408,54 @@ enum CollageRenderer {
     )
   }
 
-  private static func encodedData(for image: UIImage, format: OutputFormat, quality: OutputQuality)
-    throws -> Data
-  {
-    switch format {
-    case .jpeg:
-      guard let data = image.jpegData(compressionQuality: quality.compressionQuality) else {
-        throw AppError.encodingUnavailable(format.title)
+  private static func writeEncodedImage(
+    _ image: UIImage,
+    to url: URL,
+    format: OutputFormat,
+    quality: OutputQuality
+  ) throws {
+    try? FileManager.default.removeItem(at: url)
+    do {
+      if format == .webP {
+        guard
+          let data = SDImageWebPCoder.shared.encodedData(
+            with: image,
+            format: .webP,
+            options: [.encodeCompressionQuality: quality.compressionQuality]
+          )
+        else {
+          throw AppError.encodingUnavailable(format.title)
+        }
+        try data.write(to: url, options: .atomic)
+        return
       }
-      return data
-    case .png:
-      guard let data = image.pngData() else {
-        throw AppError.encodingUnavailable(format.title)
-      }
-      return data
-    case .webP:
-      guard
-        let data = SDImageWebPCoder.shared.encodedData(
-          with: image,
-          format: .webP,
-          options: [.encodeCompressionQuality: quality.compressionQuality]
-        )
-      else {
-        throw AppError.encodingUnavailable(format.title)
-      }
-      return data
-    case .heif:
-      guard let cgImage = image.normalizedCGImage else {
-        throw AppError.encodingUnavailable(format.title)
-      }
-      let data = NSMutableData()
-      guard
-        let destination = CGImageDestinationCreateWithData(
-          data,
-          UTType.heic.identifier as CFString,
+
+      guard let cgImage = image.normalizedCGImage,
+        let destination = CGImageDestinationCreateWithURL(
+          url as CFURL,
+          uniformType(for: format).identifier as CFString,
           1,
           nil
         )
       else {
         throw AppError.encodingUnavailable(format.title)
       }
-      CGImageDestinationAddImage(
-        destination,
-        cgImage,
-        [kCGImageDestinationLossyCompressionQuality: quality.compressionQuality] as CFDictionary
-      )
+      let properties: CFDictionary? =
+        switch format {
+        case .jpeg, .heif:
+          [kCGImageDestinationLossyCompressionQuality: quality.compressionQuality] as CFDictionary
+        case .png:
+          nil
+        case .webP:
+          nil
+        }
+      CGImageDestinationAddImage(destination, cgImage, properties)
       guard CGImageDestinationFinalize(destination) else {
         throw AppError.encodingUnavailable(format.title)
       }
-      return data as Data
+    } catch {
+      try? FileManager.default.removeItem(at: url)
+      throw error
     }
   }
 

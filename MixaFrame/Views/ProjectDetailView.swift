@@ -22,7 +22,6 @@ struct ProjectDetailView: View {
         } else {
           List(project.tasks) { task in
             Button {
-              store.preloadPersistedThumbnails(for: task.photos)
               editorRoute = EditorRoute(task: task)
             } label: {
               TaskRow(
@@ -39,6 +38,11 @@ struct ProjectDetailView: View {
                 Label("Delete", systemImage: "trash")
               }
             }
+            .task(id: store.imageCacheReloadGeneration) {
+              await store.prepareDerivedImages(for: task.photos)
+              guard !Task.isCancelled else { return }
+              await store.prepareCollageThumbnails(for: [task])
+            }
           }
         }
       } else {
@@ -46,13 +50,6 @@ struct ProjectDetailView: View {
       }
     }
     .navigationTitle(store.project(id: projectID)?.name ?? "Project")
-    .task(id: store.imageCacheReloadGeneration) {
-      let tasks = store.project(id: projectID)?.tasks ?? []
-      let photos = tasks.flatMap(\.photos)
-      await store.prepareDerivedImages(for: photos)
-      guard !Task.isCancelled else { return }
-      store.prepareCollageThumbnails(for: store.project(id: projectID)?.tasks ?? tasks)
-    }
     .toolbar {
       ToolbarItem(placement: .topBarTrailing) {
         Button {
@@ -72,7 +69,9 @@ struct ProjectDetailView: View {
       titleVisibility: .visible
     ) {
       Button("Delete Collage", role: .destructive) {
-        if let taskToDelete { store.deleteTask(projectID: projectID, taskID: taskToDelete.id) }
+        if let taskToDelete {
+          Task { await store.deleteTask(projectID: projectID, taskID: taskToDelete.id) }
+        }
         taskToDelete = nil
       }
       Button("Cancel", role: .cancel) { taskToDelete = nil }

@@ -39,6 +39,38 @@ final class LayoutEngineTests: XCTestCase {
     XCTAssertEqual(task.canvasCornerRadius, 18)
   }
 
+  func testEditorPreferencesApplyOnlyToNewCollages() throws {
+    let suiteName = "EditorPreferencePolicyTests.\(UUID().uuidString)"
+    let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+    defer { defaults.removePersistentDomain(forName: suiteName) }
+    MixaFrameExportPreferences.save(outputFormat: .heif, defaults: defaults)
+    MixaFrameExportPreferences.save(outputMaxDimension: 8192, defaults: defaults)
+    MixaFrameExportPreferences.save(background: .dark, defaults: defaults)
+
+    let projectID = UUID()
+    let newDraft = CollageEditorView.initialDraft(
+      projectID: projectID,
+      task: nil,
+      defaults: defaults
+    )
+    XCTAssertEqual(newDraft.outputFormat, .heif)
+    XCTAssertEqual(newDraft.outputMaxDimension, 8192)
+    XCTAssertEqual(newDraft.background, .dark)
+
+    var savedTask = CollageTask.new(projectID: projectID)
+    savedTask.outputFormat = .png
+    savedTask.outputMaxDimension = 1920
+    savedTask.background = .white
+    let reopenedDraft = CollageEditorView.initialDraft(
+      projectID: projectID,
+      task: savedTask,
+      defaults: defaults
+    )
+    XCTAssertEqual(reopenedDraft.outputFormat, .png)
+    XCTAssertEqual(reopenedDraft.outputMaxDimension, 1920)
+    XCTAssertEqual(reopenedDraft.background, .white)
+  }
+
   func testFourKSquareOutput() {
     var task = CollageTask.new(projectID: UUID())
     task.canvas = .square
@@ -60,6 +92,19 @@ final class LayoutEngineTests: XCTestCase {
 
     task.canvas = .portrait
     XCTAssertEqual(LayoutEngine.outputSize(for: task), CGSize(width: 6554, height: 8192))
+  }
+
+  func testExportDownsamplesSourcesToThePixelsTheirFramesNeed() {
+    let photo = CollagePhoto(fileName: "large.jpg", pixelWidth: 12_000, pixelHeight: 8_000)
+    let frame = LayoutFrame(rect: CGRect(x: 0, y: 0, width: 1024, height: 1024))
+
+    let requiredSize = CollageRenderer.requiredSourceMaximumPixelSize(
+      for: photo,
+      layoutFrame: frame
+    )
+
+    XCTAssertGreaterThanOrEqual(requiredSize, 1024)
+    XCTAssertLessThan(requiredSize, photo.pixelWidth)
   }
 
   func testPhotoCropGeometryMatchesAspectFillZoomAndEdgeClamping() {
@@ -258,6 +303,49 @@ final class LayoutEngineTests: XCTestCase {
     XCTAssertEqual(try Data(contentsOf: originalURL), sourceData)
   }
 
+  func testPhotoPipelineImportsFromFileWithoutLoadingOriginalData() throws {
+    let directory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("MixaFrameFileImportTests-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    let format = UIGraphicsImageRendererFormat()
+    format.scale = 1
+    let sourceImage = UIGraphicsImageRenderer(
+      size: CGSize(width: 900, height: 600),
+      format: format
+    ).image { context in
+      UIColor.systemTeal.setFill()
+      context.fill(CGRect(x: 0, y: 0, width: 900, height: 600))
+    }
+    let sourceURL = directory.appendingPathComponent("picker-source.jpg")
+    try XCTUnwrap(sourceImage.jpegData(compressionQuality: 0.9)).write(to: sourceURL)
+    let id = UUID()
+    let originalURL = directory.appendingPathComponent("\(id.uuidString).image")
+    let previewURL = directory.appendingPathComponent("\(id.uuidString)-preview.jpg")
+    let thumbnailURL = directory.appendingPathComponent("\(id.uuidString)-thumbnail.jpg")
+
+    let asset = try PhotoImagePipeline.importPhoto(
+      fileURL: sourceURL,
+      id: id,
+      originalURL: originalURL,
+      previewURL: previewURL,
+      thumbnailURL: thumbnailURL
+    )
+
+    XCTAssertEqual(asset.photo.pixelWidth, 900)
+    XCTAssertEqual(asset.photo.pixelHeight, 600)
+    XCTAssertEqual(try Data(contentsOf: originalURL), try Data(contentsOf: sourceURL))
+    XCTAssertLessThanOrEqual(
+      maximumPixelDimension(of: asset.images.preview),
+      PhotoImagePipeline.previewMaximumPixelSize
+    )
+    XCTAssertLessThanOrEqual(
+      maximumPixelDimension(of: asset.images.thumbnail),
+      PhotoImagePipeline.thumbnailMaximumPixelSize
+    )
+  }
+
   func testPhotoPipelineAppliesSourceOrientation() throws {
     let directory = FileManager.default.temporaryDirectory
       .appendingPathComponent("MixaFrameOrientationTests-\(UUID().uuidString)", isDirectory: true)
@@ -310,7 +398,8 @@ final class LayoutEngineTests: XCTestCase {
     defer { try? FileManager.default.removeItem(at: directory) }
 
     let store = AppStore(rootDirectory: directory)
-    let projectID = store.createProject(name: "Cleanup")
+    await store.waitUntilLoaded()
+    let projectID = await store.createProject(name: "Cleanup")
     let image = UIGraphicsImageRenderer(size: CGSize(width: 300, height: 200)).image { context in
       UIColor.systemPurple.setFill()
       context.fill(CGRect(x: 0, y: 0, width: 300, height: 200))
@@ -320,21 +409,21 @@ final class LayoutEngineTests: XCTestCase {
 
     var firstTask = CollageTask.new(projectID: projectID)
     firstTask.photos = [photo]
-    store.saveTask(firstTask)
+    await store.saveTask(firstTask)
     var secondTask = CollageTask.new(projectID: projectID)
     secondTask.photos = [photo]
-    store.saveTask(secondTask)
+    await store.saveTask(secondTask)
 
     let temporaryExport = directory.appendingPathComponent("temporary-export.jpg")
     try Data("export".utf8).write(to: temporaryExport)
-    let persistedExport = try store.persistExport(from: temporaryExport, for: firstTask)
+    let persistedExport = try await store.persistExport(from: temporaryExport, for: firstTask)
     XCTAssertEqual(persistedExport.lastPathComponent, temporaryExport.lastPathComponent)
     firstTask.latestExportFileName = persistedExport.lastPathComponent
-    store.saveTask(firstTask)
+    await store.saveTask(firstTask)
 
     firstTask.photos = []
     firstTask.latestExportFileName = nil
-    store.saveTask(firstTask)
+    await store.saveTask(firstTask)
 
     XCTAssertTrue(FileManager.default.fileExists(atPath: store.imageURL(for: photo).path))
     XCTAssertTrue(FileManager.default.fileExists(atPath: store.previewURL(for: photo).path))
@@ -342,7 +431,7 @@ final class LayoutEngineTests: XCTestCase {
     XCTAssertFalse(FileManager.default.fileExists(atPath: persistedExport.path))
 
     secondTask.photos = []
-    store.saveTask(secondTask)
+    await store.saveTask(secondTask)
 
     XCTAssertFalse(FileManager.default.fileExists(atPath: store.imageURL(for: photo).path))
     XCTAssertFalse(FileManager.default.fileExists(atPath: store.previewURL(for: photo).path))
@@ -359,7 +448,8 @@ final class LayoutEngineTests: XCTestCase {
     defer { try? FileManager.default.removeItem(at: directory) }
 
     let store = AppStore(rootDirectory: directory)
-    let projectID = store.createProject(name: "Thumbnail Persistence")
+    await store.waitUntilLoaded()
+    let projectID = await store.createProject(name: "Thumbnail Persistence")
     var photos: [CollagePhoto] = []
     for (index, color) in [UIColor.systemOrange, UIColor.systemBlue].enumerated() {
       let image = UIGraphicsImageRenderer(size: CGSize(width: 320, height: 220)).image {
@@ -376,24 +466,27 @@ final class LayoutEngineTests: XCTestCase {
 
     var task = CollageTask.new(projectID: projectID)
     task.photos = photos
-    task = try XCTUnwrap(store.saveTask(task))
+    let savedTask = await store.saveTask(task)
+    task = try XCTUnwrap(savedTask)
     let thumbnailURL = store.collageThumbnailURL(for: task)
     XCTAssertTrue(FileManager.default.fileExists(atPath: thumbnailURL.path))
     XCTAssertNotNil(store.collageThumbnailImage(for: task))
 
     let reloadedStore = AppStore(rootDirectory: directory)
+    await reloadedStore.waitUntilLoaded()
     let reloadedTask = try XCTUnwrap(reloadedStore.project(id: projectID)?.tasks.first)
     XCTAssertNotNil(reloadedTask.savedLayoutSnapshot)
     XCTAssertEqual(
       reloadedTask.photos.compactMap(\.photoLibraryAssetIdentifier),
       ["photo-library-asset-0", "photo-library-asset-1"]
     )
-    reloadedStore.preloadPersistedThumbnails(for: reloadedTask.photos)
+    await reloadedStore.preloadPersistedThumbnails(for: reloadedTask.photos)
     XCTAssertTrue(reloadedTask.photos.allSatisfy { reloadedStore.thumbnailImage(for: $0) != nil })
     XCTAssertTrue(reloadedTask.photos.allSatisfy { reloadedStore.previewImage(for: $0) != nil })
     await reloadedStore.prepareDerivedImages(for: reloadedTask.photos)
     XCTAssertTrue(reloadedTask.photos.allSatisfy { reloadedStore.thumbnailImage(for: $0) != nil })
     XCTAssertTrue(reloadedTask.photos.allSatisfy { reloadedStore.previewImage(for: $0) != nil })
+    await reloadedStore.prepareCollageThumbnails(for: [reloadedTask])
     let reloadedThumbnail = try XCTUnwrap(
       reloadedStore.collageThumbnailImage(for: reloadedTask)
     )
@@ -409,6 +502,7 @@ final class LayoutEngineTests: XCTestCase {
     defer { try? FileManager.default.removeItem(at: directory) }
 
     let store = AppStore(rootDirectory: directory)
+    await store.waitUntilLoaded()
     let image = UIGraphicsImageRenderer(size: CGSize(width: 280, height: 180)).image {
       context in
       UIColor.systemPurple.setFill()
@@ -422,7 +516,9 @@ final class LayoutEngineTests: XCTestCase {
     XCTAssertTrue(FileManager.default.fileExists(atPath: store.thumbnailURL(for: photo).path))
 
     let reloadedStore = AppStore(rootDirectory: directory)
+    await reloadedStore.waitUntilLoaded()
     XCTAssertTrue(FileManager.default.fileExists(atPath: reloadedStore.imageURL(for: photo).path))
+    await reloadedStore.prepareDerivedImages(for: [photo])
     XCTAssertNotNil(reloadedStore.previewImage(for: photo))
     XCTAssertNotNil(reloadedStore.thumbnailImage(for: photo))
   }
@@ -639,7 +735,7 @@ final class LayoutEngineTests: XCTestCase {
   }
 
   @MainActor
-  func testReusableCustomLayoutsPersistRenameDuplicateAndDelete() throws {
+  func testReusableCustomLayoutsPersistRenameDuplicateAndDelete() async throws {
     let directory = FileManager.default.temporaryDirectory
       .appendingPathComponent("MixaFrameCustomLayouts-\(UUID().uuidString)", isDirectory: true)
     defer { try? FileManager.default.removeItem(at: directory) }
@@ -649,14 +745,20 @@ final class LayoutEngineTests: XCTestCase {
     ]
 
     let store = AppStore(rootDirectory: directory)
-    let originalID = try XCTUnwrap(
-      store.createCustomLayout(name: "Pair", photoCount: 2, frames: frames)
+    await store.waitUntilLoaded()
+    let createdLayoutID = await store.createCustomLayout(
+      name: "Pair",
+      photoCount: 2,
+      frames: frames
     )
-    store.updateCustomLayout(id: originalID, name: "Side Pair")
-    let duplicateID = try XCTUnwrap(store.duplicateCustomLayout(id: originalID))
+    let originalID = try XCTUnwrap(createdLayoutID)
+    await store.updateCustomLayout(id: originalID, name: "Side Pair")
+    let createdDuplicateID = await store.duplicateCustomLayout(id: originalID)
+    let duplicateID = try XCTUnwrap(createdDuplicateID)
     XCTAssertEqual(store.savedCustomLayouts.count, 2)
 
     let reloadedStore = AppStore(rootDirectory: directory)
+    await reloadedStore.waitUntilLoaded()
     XCTAssertEqual(reloadedStore.savedCustomLayouts.count, 2)
     XCTAssertEqual(
       reloadedStore.savedCustomLayouts.first(where: { $0.id == originalID })?.name,
@@ -667,8 +769,9 @@ final class LayoutEngineTests: XCTestCase {
       frames
     )
 
-    reloadedStore.deleteCustomLayout(id: duplicateID)
+    await reloadedStore.deleteCustomLayout(id: duplicateID)
     let finalStore = AppStore(rootDirectory: directory)
+    await finalStore.waitUntilLoaded()
     XCTAssertEqual(finalStore.savedCustomLayouts.map(\.id), [originalID])
   }
 
@@ -1156,7 +1259,8 @@ final class LayoutEngineTests: XCTestCase {
       return (canvas, bestFit)
     }
     let bestScore = bestFitsByCanvas.map { $0.1.score }.max() ?? 0
-    let closestCompetitiveCanvas = bestFitsByCanvas
+    let closestCompetitiveCanvas =
+      bestFitsByCanvas
       .filter { $0.1.score >= bestScore - LayoutEngine.canvasPreferenceFitTolerance }
       .min {
         LayoutEngine.canvasDistanceFromSquare($0.0)

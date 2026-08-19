@@ -61,6 +61,72 @@ enum LayoutEngine {
   static let smartLayoutMinimumSuggestionCount = 3
   static let smartLayoutMaximumSuggestionCount = 6
 
+  private static let fittingSampleCache = LayoutSampleCache(maximumEntryCount: 128)
+
+  private struct LayoutSampleCacheKey: Hashable {
+    let family: String
+    let mainPhotoCount: Int?
+    let canvas: String
+    let outputMaxDimension: Int
+    let spacing: Double
+    let photos: [LayoutSamplePhotoKey]
+
+    init(family: LayoutFamily, mainPhotoCount: Int?, task: CollageTask) {
+      self.family = family.rawValue
+      self.mainPhotoCount = mainPhotoCount
+      canvas = task.canvas.rawValue
+      outputMaxDimension = task.outputMaxDimension
+      spacing = task.spacing
+      photos = task.photos.map(LayoutSamplePhotoKey.init)
+    }
+  }
+
+  private struct LayoutSamplePhotoKey: Hashable {
+    let id: UUID
+    let pixelWidth: Int
+    let pixelHeight: Int
+    let focalX: Double
+    let focalY: Double
+    let focusSource: String
+    let detectedFocusArea: PhotoFocusArea?
+
+    init(photo: CollagePhoto) {
+      id = photo.id
+      pixelWidth = photo.pixelWidth
+      pixelHeight = photo.pixelHeight
+      focalX = photo.focalX
+      focalY = photo.focalY
+      focusSource = photo.focusSource.rawValue
+      detectedFocusArea = photo.detectedFocusArea
+    }
+  }
+
+  private final class LayoutSampleCache: @unchecked Sendable {
+    private let lock = NSLock()
+    private let maximumEntryCount: Int
+    private var values: [LayoutSampleCacheKey: [CollageLayoutTemplate]] = [:]
+    private var insertionOrder: [LayoutSampleCacheKey] = []
+
+    init(maximumEntryCount: Int) {
+      self.maximumEntryCount = maximumEntryCount
+    }
+
+    func value(for key: LayoutSampleCacheKey) -> [CollageLayoutTemplate]? {
+      lock.withLock { values[key] }
+    }
+
+    func insert(_ value: [CollageLayoutTemplate], for key: LayoutSampleCacheKey) {
+      lock.withLock {
+        if values.updateValue(value, forKey: key) == nil {
+          insertionOrder.append(key)
+        }
+        while insertionOrder.count > maximumEntryCount {
+          values.removeValue(forKey: insertionOrder.removeFirst())
+        }
+      }
+    }
+  }
+
   private struct SmartLayoutAssessment {
     let template: CollageLayoutTemplate
     let photoFit: LayoutPhotoFit
@@ -223,15 +289,21 @@ enum LayoutEngine {
     family: LayoutFamily,
     task: CollageTask
   ) -> [CollageLayoutTemplate] {
-    if family == .smart {
-      return smartLayoutSamples(for: task)
-    }
-    return fittingLayoutSamples(
-      family: family,
-      task: task,
-      samples: layoutSamples(family: family, photoCount: max(1, task.photos.count)),
-      includesEveryDistinctSample: family.browserFamily == .hero
-    )
+    let key = LayoutSampleCacheKey(family: family, mainPhotoCount: nil, task: task)
+    if let cached = fittingSampleCache.value(for: key) { return cached }
+    let result =
+      if family == .smart {
+        smartLayoutSamples(for: task)
+      } else {
+        fittingLayoutSamples(
+          family: family,
+          task: task,
+          samples: layoutSamples(family: family, photoCount: max(1, task.photos.count)),
+          includesEveryDistinctSample: family.browserFamily == .hero
+        )
+      }
+    fittingSampleCache.insert(result, for: key)
+    return result
   }
 
   static func fittingLayoutSamples(
@@ -239,20 +311,30 @@ enum LayoutEngine {
     task: CollageTask,
     mainPhotoCount: Int
   ) -> [CollageLayoutTemplate] {
+    let key = LayoutSampleCacheKey(
+      family: family,
+      mainPhotoCount: mainPhotoCount,
+      task: task
+    )
+    if let cached = fittingSampleCache.value(for: key) { return cached }
+    let result: [CollageLayoutTemplate]
     if family == .smart {
-      return smartLayoutSamples(for: task)
+      result = smartLayoutSamples(for: task)
+    } else {
+      let samples = layoutSamples(
+        family: family,
+        photoCount: max(1, task.photos.count),
+        mainPhotoCount: mainPhotoCount
+      )
+      result = fittingLayoutSamples(
+        family: family,
+        task: task,
+        samples: samples,
+        includesEveryDistinctSample: false
+      )
     }
-    let samples = layoutSamples(
-      family: family,
-      photoCount: max(1, task.photos.count),
-      mainPhotoCount: mainPhotoCount
-    )
-    return fittingLayoutSamples(
-      family: family,
-      task: task,
-      samples: samples,
-      includesEveryDistinctSample: false
-    )
+    fittingSampleCache.insert(result, for: key)
+    return result
   }
 
   private static func fittingLayoutSamples(
@@ -344,7 +426,8 @@ enum LayoutEngine {
       selected.append(assessment)
     }
 
-    return selected
+    return
+      selected
       .sorted { isBetterSmartLayout($0, than: $1) }
       .prefix(suggestionLimit)
       .map(\.template)
@@ -1979,45 +2062,83 @@ enum LayoutEngine {
     let photoOrder = photos.indices.sorted {
       photos[$0].id.uuidString < photos[$1].id.uuidString
     }
-    let stateCount = 1 << count
-    var bestCosts = Array(repeating: Double.infinity, count: stateCount)
-    var parentMasks = Array(repeating: -1, count: stateCount)
-    var parentFrames = Array(repeating: -1, count: stateCount)
-    bestCosts[0] = 0
-
-    for mask in 0..<stateCount {
-      let photoPosition = mask.nonzeroBitCount
-      guard photoPosition < count, bestCosts[mask].isFinite else { continue }
-      let photo = photos[photoOrder[photoPosition]]
-
-      for frameIndex in visualFrames.indices where mask & (1 << frameIndex) == 0 {
-        let nextMask = mask | (1 << frameIndex)
-        let nextCost =
-          bestCosts[mask] + placementCost(photo: photo, frame: visualFrames[frameIndex])
-        if nextCost < bestCosts[nextMask] - 0.000_000_1 {
-          bestCosts[nextMask] = nextCost
-          parentMasks[nextMask] = mask
-          parentFrames[nextMask] = frameIndex
-        }
+    let costs = photoOrder.map { photoIndex in
+      visualFrames.map { frame in
+        placementCost(photo: photos[photoIndex], frame: frame)
       }
     }
-
-    var frameForPhoto = Array(repeating: 0, count: count)
-    var mask = stateCount - 1
-    while mask != 0 {
-      let frameIndex = parentFrames[mask]
-      let previousMask = parentMasks[mask]
-      guard frameIndex >= 0, previousMask >= 0 else { return visualFrames }
-      let photoPosition = previousMask.nonzeroBitCount
-      frameForPhoto[photoOrder[photoPosition]] = frameIndex
-      mask = previousMask
-    }
+    guard let assignedFrames = minimumCostAssignment(costs: costs) else { return visualFrames }
 
     var result = visualFrames
-    for (photoIndex, frameIndex) in frameForPhoto.enumerated() {
-      result[photoIndex] = visualFrames[frameIndex]
+    for photoPosition in assignedFrames.indices {
+      result[photoOrder[photoPosition]] = visualFrames[assignedFrames[photoPosition]]
     }
     return result
+  }
+
+  // Hungarian assignment keeps best-fit placement cubic instead of exponential as photo count grows.
+  private static func minimumCostAssignment(costs: [[Double]]) -> [Int]? {
+    let count = costs.count
+    guard count > 0, costs.allSatisfy({ $0.count == count }) else { return nil }
+    var rowPotential = Array(repeating: 0.0, count: count + 1)
+    var columnPotential = Array(repeating: 0.0, count: count + 1)
+    var matchedRow = Array(repeating: 0, count: count + 1)
+    var previousColumn = Array(repeating: 0, count: count + 1)
+    let epsilon = 0.000_000_1
+
+    for row in 1...count {
+      matchedRow[0] = row
+      var column = 0
+      var minimumReducedCost = Array(repeating: Double.infinity, count: count + 1)
+      var visited = Array(repeating: false, count: count + 1)
+
+      repeat {
+        visited[column] = true
+        let activeRow = matchedRow[column]
+        var delta = Double.infinity
+        var nextColumn = 0
+        for candidateColumn in 1...count where !visited[candidateColumn] {
+          let reducedCost =
+            costs[activeRow - 1][candidateColumn - 1]
+            - rowPotential[activeRow]
+            - columnPotential[candidateColumn]
+          if reducedCost < minimumReducedCost[candidateColumn] - epsilon {
+            minimumReducedCost[candidateColumn] = reducedCost
+            previousColumn[candidateColumn] = column
+          }
+          if minimumReducedCost[candidateColumn] < delta - epsilon
+            || (abs(minimumReducedCost[candidateColumn] - delta) <= epsilon
+              && (nextColumn == 0 || candidateColumn < nextColumn))
+          {
+            delta = minimumReducedCost[candidateColumn]
+            nextColumn = candidateColumn
+          }
+        }
+
+        guard delta.isFinite, nextColumn > 0 else { return nil }
+        for candidateColumn in 0...count {
+          if visited[candidateColumn] {
+            rowPotential[matchedRow[candidateColumn]] += delta
+            columnPotential[candidateColumn] -= delta
+          } else {
+            minimumReducedCost[candidateColumn] -= delta
+          }
+        }
+        column = nextColumn
+      } while matchedRow[column] != 0
+
+      repeat {
+        let nextColumn = previousColumn[column]
+        matchedRow[column] = matchedRow[nextColumn]
+        column = nextColumn
+      } while column != 0
+    }
+
+    var assignment = Array(repeating: -1, count: count)
+    for column in 1...count where matchedRow[column] > 0 {
+      assignment[matchedRow[column] - 1] = column - 1
+    }
+    return assignment.allSatisfy { $0 >= 0 } ? assignment : nil
   }
 
   private static func placementCost(photo: CollagePhoto, frame: LayoutFrame) -> Double {
