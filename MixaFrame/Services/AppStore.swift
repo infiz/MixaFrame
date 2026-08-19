@@ -87,6 +87,12 @@ final class AppStore: ObservableObject {
     await loadingTask?.value
   }
 
+  func resumeImageCacheLoading() {
+    // NSCache can discard images while the app is suspended without sending a memory warning.
+    // Restart the visible views' disk-backed image preparation whenever the scene becomes active.
+    imageCacheReloadGeneration &+= 1
+  }
+
   var photoDirectory: URL {
     rootDirectory.appendingPathComponent("Photos", isDirectory: true)
   }

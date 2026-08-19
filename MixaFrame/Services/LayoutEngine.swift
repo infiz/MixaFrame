@@ -140,21 +140,29 @@ enum LayoutEngine {
   static func outputSize(for task: CollageTask) -> CGSize {
     let maxDimension = CGFloat(max(512, min(task.outputMaxDimension, 8192)))
 
+    if let flowAxis = flowAxis(for: task) {
+      let spacing = scaledSpacing(task.spacing, outputWidth: maxDimension)
+      let gaps = CGFloat(max(0, task.photos.count - 1)) * spacing
+      switch flowAxis {
+      case .horizontal:
+        let photoWidth = task.photos.reduce(CGFloat.zero) { partial, photo in
+          partial + maxDimension * max(photo.aspectRatio, 0.05)
+        }
+        return CGSize(width: max(1, photoWidth + gaps), height: maxDimension)
+      case .vertical:
+        let photoHeight = task.photos.reduce(CGFloat.zero) { partial, photo in
+          partial + maxDimension / max(photo.aspectRatio, 0.05)
+        }
+        return CGSize(width: maxDimension, height: max(1, photoHeight + gaps))
+      }
+    }
+
     if let snapshot = activeSavedLayoutSnapshot(for: task) {
       let ratio = CGFloat(snapshot.outputAspectRatio)
       if ratio >= 1 {
         return CGSize(width: maxDimension, height: (maxDimension / ratio).rounded())
       }
       return CGSize(width: (maxDimension * ratio).rounded(), height: maxDimension)
-    }
-
-    if isNaturalVerticalStrip(task) {
-      let spacing = scaledSpacing(task.spacing, outputWidth: maxDimension)
-      let photoHeight = task.photos.reduce(CGFloat.zero) { partial, photo in
-        partial + maxDimension / max(photo.aspectRatio, 0.05)
-      }
-      let gaps = CGFloat(max(0, task.photos.count - 1)) * spacing
-      return CGSize(width: maxDimension, height: max(1, photoHeight + gaps))
     }
 
     let ratio = task.canvas.aspectRatio
@@ -388,7 +396,9 @@ enum LayoutEngine {
   ) -> [CollageLayoutTemplate] {
     let requiredCount = max(0, minimumCount)
     let suggestionLimit = max(requiredCount, maximumCount)
-    let samples = LayoutCatalog.templates(photoCount: max(1, task.photos.count))
+    let samples = LayoutCatalog.templates(photoCount: max(1, task.photos.count)).filter {
+      $0.family != .flow
+    }
     guard task.photos.count > 1 else { return Array(samples.prefix(suggestionLimit)) }
 
     var distinctAssessments: [String: SmartLayoutAssessment] = [:]
@@ -479,7 +489,9 @@ enum LayoutEngine {
   static func recommendedCanvasAndTemplate(
     for task: CollageTask
   ) -> (canvas: CanvasPreset, template: CollageLayoutTemplate) {
-    let layouts = LayoutCatalog.templates(photoCount: max(1, task.photos.count))
+    let layouts = LayoutCatalog.templates(photoCount: max(1, task.photos.count)).filter {
+      $0.family != .flow
+    }
     guard task.photos.count > 1 else { return (task.canvas, layouts[0]) }
 
     var recommendations: [(CanvasPreset, CollageLayoutTemplate, LayoutPhotoFit)] = []
@@ -531,7 +543,9 @@ enum LayoutEngine {
   }
 
   static func recommendedTemplate(for task: CollageTask) -> CollageLayoutTemplate {
-    let layouts = LayoutCatalog.templates(photoCount: max(1, task.photos.count))
+    let layouts = LayoutCatalog.templates(photoCount: max(1, task.photos.count)).filter {
+      $0.family != .flow
+    }
     guard task.photos.count > 1 else { return layouts[0] }
     let assessed = layouts.map { template in
       (template, photoFit(for: template, task: task))
@@ -651,9 +665,15 @@ enum LayoutEngine {
     ).first { mainPhotoStructureKey(for: $0.recipe) == structureKey }
   }
 
-  static func isNaturalVerticalStrip(_ task: CollageTask) -> Bool {
-    if case .naturalVerticalStrip = selectedTemplate(for: task).recipe { return true }
-    return false
+  static func flowAxis(for task: CollageTask) -> LayoutAxis? {
+    guard case .flow(let axis) = LayoutCatalog.selectedTemplate(for: task).recipe else {
+      return nil
+    }
+    return axis
+  }
+
+  static func isFlowLayout(_ task: CollageTask) -> Bool {
+    flowAxis(for: task) != nil
   }
 
   static func frames(for task: CollageTask, in size: CGSize) -> [CGRect] {
@@ -687,7 +707,10 @@ enum LayoutEngine {
         )
       }
     }
-    let spacing = scaledSpacing(task.spacing, outputWidth: size.width)
+    let spacing = scaledSpacing(
+      task.spacing,
+      outputWidth: flowAxis(for: task) == .horizontal ? size.height : size.width
+    )
     let selectedTemplate = selectedTemplate(for: task)
     if case .custom = selectedTemplate.recipe,
       let normalizedFrames = task.customLayoutFrames,
@@ -724,7 +747,7 @@ enum LayoutEngine {
     {
       for index in frames.indices {
         frames[index].rect = overrides[index].rect(in: size)
-        if isNaturalVerticalStrip(task) {
+        if isFlowLayout(task) {
           frames[index].usesAspectFit = false
         }
       }
@@ -888,6 +911,7 @@ enum LayoutEngine {
 
   static func layoutDividers(for task: CollageTask, in size: CGSize) -> [LayoutDivider] {
     guard task.photos.count > 1 else { return [] }
+    guard !isFlowLayout(task) else { return [] }
     if activeSavedLayoutSnapshot(for: task) != nil {
       return frameOverrideDividers(for: task, in: size)
     }
@@ -1522,15 +1546,28 @@ enum LayoutEngine {
           featuredWeight: featuredWeight, in: rect, spacing: spacing
         ).map { LayoutFrame(rect: $0) })
 
-    case .naturalVerticalStrip:
-      var y = rect.minY
-      return (0..<photoCount).map { index in
-        let ratio = index < photoAspectRatios.count ? photoAspectRatios[index] : 1
-        let height = rect.width / max(ratio, 0.05)
-        defer { y += height + spacing }
-        return LayoutFrame(
-          rect: CGRect(x: rect.minX, y: y, width: rect.width, height: height)
-        )
+    case .flow(let axis):
+      switch axis {
+      case .horizontal:
+        var x = rect.minX
+        return (0..<photoCount).map { index in
+          let ratio = index < photoAspectRatios.count ? photoAspectRatios[index] : 1
+          let width = rect.height * max(ratio, 0.05)
+          defer { x += width + spacing }
+          return LayoutFrame(
+            rect: CGRect(x: x, y: rect.minY, width: width, height: rect.height)
+          )
+        }
+      case .vertical:
+        var y = rect.minY
+        return (0..<photoCount).map { index in
+          let ratio = index < photoAspectRatios.count ? photoAspectRatios[index] : 1
+          let height = rect.width / max(ratio, 0.05)
+          defer { y += height + spacing }
+          return LayoutFrame(
+            rect: CGRect(x: rect.minX, y: y, width: rect.width, height: height)
+          )
+        }
       }
 
     case .slantedMosaic(

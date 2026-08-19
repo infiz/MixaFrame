@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import UniformTypeIdentifiers
 
 struct CollagePreview: View {
   let task: CollageTask
@@ -11,8 +12,6 @@ struct CollagePreview: View {
 
   var onAdjustLayoutDivider: (LayoutDivider, Double) -> Void = { _, _ in }
   var maximumHeight: CGFloat = 480
-
-  @State private var isManipulatingPhoto = false
 
   private var outputSize: CGSize { LayoutEngine.outputSize(for: task) }
 
@@ -32,26 +31,43 @@ struct CollagePreview: View {
             .position(x: proxy.size.width / 2, y: proxy.size.height / 2)
         }
         .frame(height: maximumHeight)
-      } else if LayoutEngine.isNaturalVerticalStrip(task) {
+      } else if let flowAxis = LayoutEngine.flowAxis(for: task) {
         GeometryReader { proxy in
-          ScrollView(.vertical) {
-            let width = proxy.size.width
-            let height = width * outputSize.height / max(outputSize.width, 1)
-            CollageCanvasContent(
-              task: task,
-              displaySize: CGSize(width: width, height: height),
-              imageLoader: imageLoader,
-              onViewPhoto: onViewPhoto,
-              onMovePhoto: onMovePhoto,
-              onAdjustCrop: onAdjustCrop,
-              onAdjustZoom: onAdjustZoom,
-              onManipulationChanged: { isManipulatingPhoto = $0 },
-              onAdjustLayoutDivider: onAdjustLayoutDivider
-            )
-            .frame(width: width, height: height)
+          if flowAxis == .vertical {
+            ScrollView(.vertical) {
+              let width = proxy.size.width
+              let height = width * outputSize.height / max(outputSize.width, 1)
+              CollageCanvasContent(
+                task: task,
+                displaySize: CGSize(width: width, height: height),
+                imageLoader: imageLoader,
+                onViewPhoto: onViewPhoto,
+                onMovePhoto: onMovePhoto,
+                onAdjustCrop: onAdjustCrop,
+                onAdjustZoom: onAdjustZoom,
+                onAdjustLayoutDivider: onAdjustLayoutDivider
+              )
+              .frame(width: width, height: height)
+            }
+            .clipped()
+          } else {
+            ScrollView(.horizontal) {
+              let height = proxy.size.height
+              let width = height * outputSize.width / max(outputSize.height, 1)
+              CollageCanvasContent(
+                task: task,
+                displaySize: CGSize(width: width, height: height),
+                imageLoader: imageLoader,
+                onViewPhoto: onViewPhoto,
+                onMovePhoto: onMovePhoto,
+                onAdjustCrop: onAdjustCrop,
+                onAdjustZoom: onAdjustZoom,
+                onAdjustLayoutDivider: onAdjustLayoutDivider
+              )
+              .frame(width: width, height: height)
+            }
+            .clipped()
           }
-          .scrollDisabled(isManipulatingPhoto)
-          .clipped()
         }
         .frame(height: maximumHeight)
       } else {
@@ -65,7 +81,6 @@ struct CollagePreview: View {
             onMovePhoto: onMovePhoto,
             onAdjustCrop: onAdjustCrop,
             onAdjustZoom: onAdjustZoom,
-            onManipulationChanged: { isManipulatingPhoto = $0 },
             onAdjustLayoutDivider: onAdjustLayoutDivider
           )
           .frame(width: canvasSize.width, height: canvasSize.height)
@@ -190,12 +205,12 @@ private struct CollageCanvasContent: View {
   let onMovePhoto: (UUID, UUID) -> Void
   let onAdjustCrop: (UUID, CGPoint) -> Void
   let onAdjustZoom: (UUID, Double) -> Void
-  let onManipulationChanged: (Bool) -> Void
   let onAdjustLayoutDivider: (LayoutDivider, Double) -> Void
 
   @State private var swapTargetPhotoID: UUID?
   @State private var swapDragPreview: PhotoSwapDragState?
   @State private var isDraggingLayoutDivider = false
+  @State private var selectedFlowPhotoID: UUID?
 
   var body: some View {
     let outputSize = LayoutEngine.outputSize(for: task)
@@ -219,7 +234,17 @@ private struct CollageCanvasContent: View {
             normalizedClipPolygon: sourceLayoutFrame.normalizedClipPolygon,
             rotationDegrees: sourceLayoutFrame.rotationDegrees,
             frameSize: frame.size,
+            usesFlowDragAndDrop: LayoutEngine.isFlowLayout(task),
+            isFlowPhotoSelected: selectedFlowPhotoID == photo.id,
             onViewPhoto: { onViewPhoto(photo.id) },
+            onSelectFlowPhoto: {
+              selectedFlowPhotoID = selectedFlowPhotoID == photo.id ? nil : photo.id
+            },
+            onBeginFlowSwap: { selectedFlowPhotoID = photo.id },
+            onDropPhoto: { sourceID in
+              guard sourceID != photo.id else { return }
+              onMovePhoto(sourceID, photo.id)
+            },
             onSwapDragChanged: { location in
               guard !isDraggingLayoutDivider else { return }
               let newTargetPhotoID = swapTarget(
@@ -233,7 +258,8 @@ private struct CollageCanvasContent: View {
                 UIImpactFeedbackGenerator(style: .medium).impactOccurred()
               }
               swapTargetPhotoID = newTargetPhotoID
-              swapDragPreview = newTargetPhotoID == nil
+              swapDragPreview =
+                newTargetPhotoID == nil
                 ? nil : PhotoSwapDragState(photoID: photo.id, location: location)
             },
             onSwapDragEnded: {
@@ -251,8 +277,7 @@ private struct CollageCanvasContent: View {
             onAdjustZoom: { zoom in
               guard !isDraggingLayoutDivider else { return }
               onAdjustZoom(photo.id, zoom)
-            },
-            onManipulationChanged: onManipulationChanged
+            }
           )
           .frame(width: frame.width, height: frame.height)
           .rotationEffect(.degrees(sourceLayoutFrame.rotationDegrees))
@@ -283,7 +308,6 @@ private struct CollageCanvasContent: View {
               swapTargetPhotoID = nil
               swapDragPreview = nil
             }
-            onManipulationChanged(isDragging)
           }
         )
         .frame(width: displaySize.width, height: displaySize.height)
@@ -426,11 +450,11 @@ private struct LayoutDividerHandle: View {
     dividerPath
       .stroke(Color.black.opacity(0.001), style: StrokeStyle(lineWidth: 30, lineCap: .round))
       .gesture(dragGesture)
-    .accessibilityElement(children: .ignore)
-    .accessibilityLabel(
-      divider.axis == .horizontal ? "Resize adjacent rows" : "Resize adjacent columns"
-    )
-    .accessibilityHint("Drag to change the neighboring photo frame sizes")
+      .accessibilityElement(children: .ignore)
+      .accessibilityLabel(
+        divider.axis == .horizontal ? "Resize adjacent rows" : "Resize adjacent columns"
+      )
+      .accessibilityHint("Drag to change the neighboring photo frame sizes")
   }
 
   private var dividerPath: Path {
@@ -474,16 +498,385 @@ private struct InteractivePhotoFrame: View {
   let normalizedClipPolygon: [CGPoint]?
   let rotationDegrees: CGFloat
   let frameSize: CGSize
+  let usesFlowDragAndDrop: Bool
+  let isFlowPhotoSelected: Bool
   let onViewPhoto: () -> Void
+  let onSelectFlowPhoto: () -> Void
+  let onBeginFlowSwap: () -> Void
+  let onDropPhoto: (UUID) -> Void
   let onSwapDragChanged: (CGPoint) -> Void
   let onSwapDragEnded: () -> Void
   let onAdjustCrop: (CGPoint) -> Void
   let onAdjustZoom: (Double) -> Void
-  let onManipulationChanged: (Bool) -> Void
 
   @State private var dragStart: CGPoint?
   @State private var zoomStart: Double?
   @State private var isManipulating = false
+  @State private var isFlowDropTarget = false
+
+  @ViewBuilder
+  var body: some View {
+    let content = FocalPhotoView(
+      image: image,
+      focalPoint: CGPoint(x: photo.focalX, y: photo.focalY),
+      zoom: CGFloat(photo.effectiveZoom),
+      usesAspectFit: usesAspectFit
+    )
+    .clipShape(
+      LayoutFrameShape(
+        cornerRadiusFraction: cornerRadiusFraction,
+        normalizedClipPolygon: normalizedClipPolygon
+      )
+    )
+    .overlay {
+      if isManipulating && !showsDropTarget {
+        LayoutFrameShape(
+          cornerRadiusFraction: cornerRadiusFraction,
+          normalizedClipPolygon: normalizedClipPolygon
+        )
+        .stroke(.white.opacity(0.9), lineWidth: 2)
+      }
+    }
+    .overlay {
+      if isFlowPhotoSelected && !showsDropTarget {
+        LayoutFrameShape(
+          cornerRadiusFraction: cornerRadiusFraction,
+          normalizedClipPolygon: normalizedClipPolygon
+        )
+        .stroke(.indigo, lineWidth: 3)
+      }
+    }
+    .overlay {
+      if showsDropTarget {
+        LayoutFrameShape(
+          cornerRadiusFraction: cornerRadiusFraction,
+          normalizedClipPolygon: normalizedClipPolygon
+        )
+        .fill(.indigo.opacity(0.18))
+        .stroke(.indigo, lineWidth: 4)
+      }
+    }
+    .overlay(alignment: .topTrailing) {
+      if showsDropTarget {
+        Image(systemName: "arrow.left.arrow.right.circle.fill")
+          .font(.system(size: 26, weight: .semibold))
+          .symbolRenderingMode(.palette)
+          .foregroundStyle(.white, .indigo)
+          .padding(7)
+          .transition(.scale.combined(with: .opacity))
+      }
+    }
+    .scaleEffect(showsDropTarget ? 0.97 : 1)
+    .animation(.easeOut(duration: 0.14), value: showsDropTarget)
+    .contentShape(Rectangle())
+    .accessibilityHint(
+      usesFlowDragAndDrop
+        ? isFlowPhotoSelected
+          ? "Selected for editing. Double tap to view the original, pinch to zoom, drag with two fingers to reposition, swipe with one finger to scroll, or touch and hold to swap."
+          : "Tap to select, double tap to view the original, swipe to scroll, or touch and hold to swap."
+        : usesAspectFit
+          ? "Double tap to view the original photo. Drag onto another photo to swap."
+          : "Double tap to view the original photo. Drag to reposition, move onto another photo to swap, or pinch to zoom."
+    )
+
+    if usesFlowDragAndDrop {
+      Group {
+        if isFlowPhotoSelected {
+          content.overlay {
+            FlowPhotoEditingGestureOverlay(
+              onSingleTap: {
+                onSelectFlowPhoto()
+                UISelectionFeedbackGenerator().selectionChanged()
+              },
+              onDoubleTap: onViewPhoto,
+              onPinchChanged: updateZoom,
+              onPinchEnded: finishZoom,
+              onPanChanged: updateFlowPosition,
+              onPanEnded: finishFlowPosition
+            )
+          }
+        } else {
+          content
+            .onTapGesture(count: 2, perform: onViewPhoto)
+            .onTapGesture {
+              onSelectFlowPhoto()
+              UISelectionFeedbackGenerator().selectionChanged()
+            }
+        }
+      }
+      .onDrag {
+        onBeginFlowSwap()
+        return NSItemProvider(object: photo.id.uuidString as NSString)
+      } preview: {
+        FlowSwapPhotoPreview(
+          photo: photo,
+          image: image,
+          usesAspectFit: usesAspectFit,
+          cornerRadiusFraction: cornerRadiusFraction,
+          normalizedClipPolygon: normalizedClipPolygon
+        )
+        .frame(width: frameSize.width, height: frameSize.height)
+      }
+      .onDrop(
+        of: [UTType.plainText],
+        delegate: FlowPhotoDropDelegate(
+          targetPhotoID: photo.id,
+          isTargeted: $isFlowDropTarget,
+          onDropPhoto: onDropPhoto
+        )
+      )
+    } else {
+      content
+        .onTapGesture(count: 2, perform: onViewPhoto)
+        .simultaneousGesture(photoDragGesture)
+        .simultaneousGesture(zoomGesture)
+    }
+  }
+
+  private var showsDropTarget: Bool {
+    isDropTarget || isFlowDropTarget
+  }
+
+  private var photoDragGesture: some Gesture {
+    DragGesture(minimumDistance: 3, coordinateSpace: .named("collageCanvas"))
+      .onChanged { value in
+        guard zoomStart == nil else { return }
+        if dragStart == nil {
+          dragStart = CGPoint(x: photo.focalX, y: photo.focalY)
+          isManipulating = true
+          UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        }
+
+        onSwapDragChanged(value.location)
+
+        updateCrop(translation: value.translation)
+      }
+      .onEnded { _ in
+        onSwapDragEnded()
+        dragStart = nil
+        isManipulating = false
+      }
+  }
+
+  private func updateFlowPosition(_ translation: CGSize) {
+    guard photo.effectiveZoom > 1.000_1, zoomStart == nil else { return }
+    if dragStart == nil {
+      dragStart = CGPoint(x: photo.focalX, y: photo.focalY)
+      isManipulating = true
+      UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    }
+    updateCrop(translation: translation)
+  }
+
+  private func finishFlowPosition() {
+    dragStart = nil
+    isManipulating = false
+  }
+
+  private func updateCrop(translation: CGSize) {
+    guard !usesAspectFit, let dragStart else { return }
+    let imageWidth = max(CGFloat(photo.pixelWidth), 1)
+    let imageHeight = max(CGFloat(photo.pixelHeight), 1)
+    let zoom = max(CGFloat(photo.effectiveZoom), 1)
+    let scale = max(frameSize.width / imageWidth, frameSize.height / imageHeight) * zoom
+    let scaledWidth = max(imageWidth * scale, 1)
+    let scaledHeight = max(imageHeight * scale, 1)
+    let x = dragStart.x - translation.width / scaledWidth
+    let y = dragStart.y - translation.height / scaledHeight
+    let focalPoint = PhotoCropGeometry.clampedFocalPoint(
+      sourceAspectRatio: imageWidth / imageHeight,
+      destinationAspectRatio: frameSize.width / max(frameSize.height, 1),
+      focalPoint: CGPoint(x: x, y: y),
+      zoom: zoom
+    )
+    let currentFocalPoint = CGPoint(x: photo.focalX, y: photo.focalY)
+    guard
+      hypot(
+        focalPoint.x - currentFocalPoint.x,
+        focalPoint.y - currentFocalPoint.y
+      ) > 0.000_001
+    else { return }
+    onAdjustCrop(focalPoint)
+  }
+
+  private var zoomGesture: some Gesture {
+    MagnificationGesture()
+      .onChanged(updateZoom)
+      .onEnded { _ in finishZoom() }
+  }
+
+  private func updateZoom(_ magnification: CGFloat) {
+    guard !usesAspectFit else { return }
+    if zoomStart == nil {
+      zoomStart = photo.effectiveZoom
+      isManipulating = true
+    }
+    guard let zoomStart else { return }
+    onAdjustZoom(min(4, max(1, zoomStart * magnification)))
+  }
+
+  private func finishZoom() {
+    zoomStart = nil
+    isManipulating = false
+  }
+}
+
+private struct FlowPhotoEditingGestureOverlay: UIViewRepresentable {
+  let onSingleTap: () -> Void
+  let onDoubleTap: () -> Void
+  let onPinchChanged: (CGFloat) -> Void
+  let onPinchEnded: () -> Void
+  let onPanChanged: (CGSize) -> Void
+  let onPanEnded: () -> Void
+
+  func makeCoordinator() -> Coordinator {
+    Coordinator(owner: self)
+  }
+
+  func makeUIView(context: Context) -> UIView {
+    let view = UIView()
+    view.backgroundColor = .clear
+    view.isAccessibilityElement = false
+
+    let doubleTap = UITapGestureRecognizer(
+      target: context.coordinator,
+      action: #selector(Coordinator.handleDoubleTap(_:))
+    )
+    doubleTap.numberOfTapsRequired = 2
+    doubleTap.cancelsTouchesInView = false
+    doubleTap.delegate = context.coordinator
+    view.addGestureRecognizer(doubleTap)
+
+    let singleTap = UITapGestureRecognizer(
+      target: context.coordinator,
+      action: #selector(Coordinator.handleSingleTap(_:))
+    )
+    singleTap.numberOfTapsRequired = 1
+    singleTap.cancelsTouchesInView = false
+    singleTap.delegate = context.coordinator
+    singleTap.require(toFail: doubleTap)
+    view.addGestureRecognizer(singleTap)
+
+    let pinch = UIPinchGestureRecognizer(
+      target: context.coordinator,
+      action: #selector(Coordinator.handlePinch(_:))
+    )
+    pinch.cancelsTouchesInView = false
+    pinch.delegate = context.coordinator
+    view.addGestureRecognizer(pinch)
+
+    let pan = UIPanGestureRecognizer(
+      target: context.coordinator,
+      action: #selector(Coordinator.handlePan(_:))
+    )
+    pan.minimumNumberOfTouches = 2
+    pan.maximumNumberOfTouches = 2
+    pan.cancelsTouchesInView = false
+    pan.delegate = context.coordinator
+    view.addGestureRecognizer(pan)
+
+    return view
+  }
+
+  func updateUIView(_ uiView: UIView, context: Context) {
+    context.coordinator.owner = self
+  }
+
+  final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+    var owner: FlowPhotoEditingGestureOverlay
+
+    init(owner: FlowPhotoEditingGestureOverlay) {
+      self.owner = owner
+    }
+
+    @objc func handleSingleTap(_ recognizer: UITapGestureRecognizer) {
+      guard recognizer.state == .ended else { return }
+      owner.onSingleTap()
+    }
+
+    @objc func handleDoubleTap(_ recognizer: UITapGestureRecognizer) {
+      guard recognizer.state == .ended else { return }
+      owner.onDoubleTap()
+    }
+
+    @objc func handlePinch(_ recognizer: UIPinchGestureRecognizer) {
+      switch recognizer.state {
+      case .began, .changed:
+        owner.onPinchChanged(recognizer.scale)
+      case .ended, .cancelled, .failed:
+        owner.onPinchEnded()
+      default:
+        break
+      }
+    }
+
+    @objc func handlePan(_ recognizer: UIPanGestureRecognizer) {
+      switch recognizer.state {
+      case .began, .changed:
+        let translation = recognizer.translation(in: recognizer.view)
+        owner.onPanChanged(CGSize(width: translation.x, height: translation.y))
+      case .ended, .cancelled, .failed:
+        owner.onPanEnded()
+      default:
+        break
+      }
+    }
+
+    func gestureRecognizer(
+      _ gestureRecognizer: UIGestureRecognizer,
+      shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
+    ) -> Bool {
+      true
+    }
+  }
+}
+
+private struct FlowPhotoDropDelegate: DropDelegate {
+  let targetPhotoID: UUID
+  @Binding var isTargeted: Bool
+  let onDropPhoto: (UUID) -> Void
+
+  func validateDrop(info: DropInfo) -> Bool {
+    info.hasItemsConforming(to: [UTType.plainText])
+  }
+
+  func dropEntered(info: DropInfo) {
+    isTargeted = true
+  }
+
+  func dropExited(info: DropInfo) {
+    isTargeted = false
+  }
+
+  func dropUpdated(info: DropInfo) -> DropProposal? {
+    DropProposal(operation: .move)
+  }
+
+  func performDrop(info: DropInfo) -> Bool {
+    isTargeted = false
+    guard let provider = info.itemProviders(for: [UTType.plainText]).first else { return false }
+    provider.loadObject(ofClass: NSString.self) { object, _ in
+      guard let rawSourceID = object as? NSString,
+        let sourceID = UUID(uuidString: rawSourceID as String),
+        sourceID != targetPhotoID
+      else { return }
+      Task { @MainActor in onDropPhoto(sourceID) }
+    }
+    return true
+  }
+}
+
+private struct PhotoSwapDragState {
+  let photoID: UUID
+  let location: CGPoint
+}
+
+private struct FlowSwapPhotoPreview: View {
+  let photo: CollagePhoto
+  let image: UIImage?
+  let usesAspectFit: Bool
+  let cornerRadiusFraction: CGFloat
+  let normalizedClipPolygon: [CGPoint]?
 
   var body: some View {
     FocalPhotoView(
@@ -498,118 +891,15 @@ private struct InteractivePhotoFrame: View {
         normalizedClipPolygon: normalizedClipPolygon
       )
     )
-    .overlay {
-      if isManipulating && !isDropTarget {
-        LayoutFrameShape(
-          cornerRadiusFraction: cornerRadiusFraction,
-          normalizedClipPolygon: normalizedClipPolygon
-        )
-        .stroke(.white.opacity(0.9), lineWidth: 2)
-      }
-    }
-    .overlay {
-      if isDropTarget {
-        LayoutFrameShape(
-          cornerRadiusFraction: cornerRadiusFraction,
-          normalizedClipPolygon: normalizedClipPolygon
-        )
-        .fill(.indigo.opacity(0.18))
-        .stroke(.indigo, lineWidth: 4)
-      }
-    }
     .overlay(alignment: .topTrailing) {
-      if isDropTarget {
-        Image(systemName: "arrow.left.arrow.right.circle.fill")
-          .font(.system(size: 26, weight: .semibold))
-          .symbolRenderingMode(.palette)
-          .foregroundStyle(.white, .indigo)
-          .padding(7)
-          .transition(.scale.combined(with: .opacity))
-      }
+      Image(systemName: "arrow.left.arrow.right.circle.fill")
+        .font(.system(size: 27, weight: .semibold))
+        .symbolRenderingMode(.palette)
+        .foregroundStyle(.white, .indigo)
+        .padding(6)
     }
-    .scaleEffect(isDropTarget ? 0.97 : 1)
-    .animation(.easeOut(duration: 0.14), value: isDropTarget)
-    .contentShape(Rectangle())
-    .onTapGesture(count: 2, perform: onViewPhoto)
-    .simultaneousGesture(photoDragGesture)
-    .simultaneousGesture(zoomGesture)
-    .accessibilityHint(
-      usesAspectFit
-        ? "Double tap to view the original photo. Drag onto another photo to swap."
-        : "Double tap to view the original photo. Drag to reposition, move onto another photo to swap, or pinch to zoom."
-    )
+    .shadow(color: .black.opacity(0.32), radius: 9, y: 5)
   }
-
-  private var photoDragGesture: some Gesture {
-    DragGesture(minimumDistance: 3, coordinateSpace: .named("collageCanvas"))
-      .onChanged { value in
-        guard zoomStart == nil else { return }
-        if dragStart == nil {
-          dragStart = CGPoint(x: photo.focalX, y: photo.focalY)
-          isManipulating = true
-          onManipulationChanged(true)
-          UIImpactFeedbackGenerator(style: .light).impactOccurred()
-        }
-
-        onSwapDragChanged(value.location)
-
-        if !usesAspectFit, let dragStart {
-          let imageWidth = max(CGFloat(photo.pixelWidth), 1)
-          let imageHeight = max(CGFloat(photo.pixelHeight), 1)
-          let zoom = max(CGFloat(photo.effectiveZoom), 1)
-          let scale =
-            max(frameSize.width / imageWidth, frameSize.height / imageHeight) * zoom
-          let scaledWidth = max(imageWidth * scale, 1)
-          let scaledHeight = max(imageHeight * scale, 1)
-          let x = dragStart.x - value.translation.width / scaledWidth
-          let y = dragStart.y - value.translation.height / scaledHeight
-          let focalPoint = PhotoCropGeometry.clampedFocalPoint(
-            sourceAspectRatio: imageWidth / imageHeight,
-            destinationAspectRatio: frameSize.width / max(frameSize.height, 1),
-            focalPoint: CGPoint(x: x, y: y),
-            zoom: zoom
-          )
-          let currentFocalPoint = CGPoint(x: photo.focalX, y: photo.focalY)
-          guard
-            hypot(
-              focalPoint.x - currentFocalPoint.x,
-              focalPoint.y - currentFocalPoint.y
-            ) > 0.000_001
-          else { return }
-          onAdjustCrop(focalPoint)
-        }
-      }
-      .onEnded { _ in
-        onSwapDragEnded()
-        dragStart = nil
-        isManipulating = false
-        onManipulationChanged(false)
-      }
-  }
-
-  private var zoomGesture: some Gesture {
-    MagnificationGesture()
-      .onChanged { value in
-        guard !usesAspectFit else { return }
-        if zoomStart == nil {
-          zoomStart = photo.effectiveZoom
-          isManipulating = true
-          onManipulationChanged(true)
-        }
-        guard let zoomStart else { return }
-        onAdjustZoom(min(4, max(1, zoomStart * value)))
-      }
-      .onEnded { _ in
-        zoomStart = nil
-        isManipulating = false
-        onManipulationChanged(false)
-      }
-  }
-}
-
-private struct PhotoSwapDragState {
-  let photoID: UUID
-  let location: CGPoint
 }
 
 private struct FloatingSwapPhotoPreview: View {

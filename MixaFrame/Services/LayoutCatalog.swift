@@ -8,11 +8,12 @@ enum LayoutFamily: String, CaseIterable, Identifiable {
   case editorial
   case mosaic
   case slanted
+  case flow
   case custom
 
   var id: String { rawValue }
 
-  static let browserCases: [LayoutFamily] = [.smart, .grid, .hero, .mosaic, .slanted]
+  static let browserCases: [LayoutFamily] = [.smart, .grid, .hero, .mosaic, .slanted, .flow]
 
   var browserFamily: LayoutFamily {
     self == .editorial ? .hero : self
@@ -34,6 +35,7 @@ enum LayoutFamily: String, CaseIterable, Identifiable {
     case .editorial: "newspaper"
     case .mosaic: "square.grid.3x3.topleft.filled"
     case .slanted: "square.split.diagonal.2x2"
+    case .flow: "rectangle.3.group"
     case .custom: "rectangle.split.2x2"
     }
   }
@@ -76,7 +78,7 @@ enum LayoutRecipe: Hashable {
   case masonry(columns: Int, seed: Int)
   case brick(rows: Int, offset: CGFloat)
   case strip(axis: LayoutAxis, featuredIndex: Int?, featuredWeight: CGFloat)
-  case naturalVerticalStrip
+  case flow(axis: LayoutAxis)
   case slantedMosaic(
     rowCounts: [Int], rowWeights: [CGFloat], horizontalSlope: CGFloat,
     verticalSlope: CGFloat, alternating: Bool)
@@ -494,6 +496,16 @@ enum LayoutCatalog {
         return layouts
       }
       return layouts.filter { retainedKeys.contains(layoutKey(for: $0.id)) }
+
+    case .flow:
+      return [
+        template(
+          count, "flow-horizontal", "Horizontal Flow", .flow,
+          .flow(axis: .horizontal)),
+        template(
+          count, "flow-vertical", "Vertical Flow", .flow,
+          .flow(axis: .vertical), .verticalStrip),
+      ]
 
     case .custom:
       return []

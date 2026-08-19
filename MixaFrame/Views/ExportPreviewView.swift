@@ -47,8 +47,17 @@ struct ExportPreviewView: View {
             .truncationMode(.middle)
             .frame(maxWidth: .infinity, alignment: .leading)
           Text(exportDetails)
-          .font(.caption)
-          .foregroundStyle(.secondary)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+          if export.wasScaledForSafety {
+            Label(
+              "Flow strip scaled from \(pixelDimensions(export.requestedOutputSize)) to fit safely.",
+              systemImage: "arrow.down.right.and.arrow.up.left"
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+          }
           if export.includesWatermark {
             Label("Free export · MixaFrame watermark included", systemImage: "info.circle")
               .font(.caption)
@@ -134,6 +143,10 @@ struct ExportPreviewView: View {
     return details.joined(separator: " · ")
   }
 
+  private func pixelDimensions(_ size: CGSize) -> String {
+    "\(Int(size.width)) × \(Int(size.height)) px"
+  }
+
   private var fileSizeDescription: String? {
     guard
       let resourceValues = try? export.fileURL.resourceValues(forKeys: [.fileSizeKey]),
@@ -191,7 +204,9 @@ struct ExistingPhotoExportChoiceView: View {
           }
         }
         .frame(maxWidth: .infinity, minHeight: 130, maxHeight: 170)
-        .background(Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 14))
+        .background(
+          Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 14)
+        )
         .clipShape(RoundedRectangle(cornerRadius: 14))
 
         if let exportedAt {
@@ -199,8 +214,8 @@ struct ExistingPhotoExportChoiceView: View {
             "Previously exported "
               + exportedAt.formatted(date: .abbreviated, time: .shortened)
           )
-            .font(.caption)
-            .foregroundStyle(.secondary)
+          .font(.caption)
+          .foregroundStyle(.secondary)
         }
 
         Button("Replace Existing Photo") {
@@ -240,8 +255,9 @@ struct ExistingPhotoExportChoiceView: View {
       return
     }
 
-    guard let asset = PHAsset.fetchAssets(withLocalIdentifiers: [assetIdentifier], options: nil)
-      .firstObject
+    guard
+      let asset = PHAsset.fetchAssets(withLocalIdentifiers: [assetIdentifier], options: nil)
+        .firstObject
     else {
       isLoading = false
       loadMessage = "The previous export may have been deleted. Create a new photo to continue."

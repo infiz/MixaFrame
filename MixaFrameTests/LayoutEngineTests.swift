@@ -6,6 +6,22 @@ import XCTest
 @testable import MixaFrame
 
 final class LayoutEngineTests: XCTestCase {
+  @MainActor
+  func testSceneActivationRequestsImageCacheReload() async {
+    let directory = FileManager.default.temporaryDirectory
+      .appendingPathComponent(
+        "MixaFrameForegroundReloadTests-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    let store = AppStore(rootDirectory: directory)
+    await store.waitUntilLoaded()
+    let initialGeneration = store.imageCacheReloadGeneration
+
+    store.resumeImageCacheLoading()
+
+    XCTAssertEqual(store.imageCacheReloadGeneration, initialGeneration + 1)
+  }
+
   func testExportedPhotoLibraryIdentifierPersistsWithCollage() throws {
     var task = CollageTask.new(projectID: UUID())
     task.exportedPhotoLibraryAssetIdentifier = "asset-local-identifier"
@@ -92,6 +108,107 @@ final class LayoutEngineTests: XCTestCase {
 
     task.canvas = .portrait
     XCTAssertEqual(LayoutEngine.outputSize(for: task), CGSize(width: 6554, height: 8192))
+  }
+
+  func testFlowLayoutsUseResolutionAsTheirSharedDimension() throws {
+    var task = CollageTask.new(projectID: UUID())
+    task.outputMaxDimension = 1000
+    task.spacing = 10
+    task.photos = [
+      CollagePhoto(fileName: "wide", pixelWidth: 2000, pixelHeight: 1000),
+      CollagePhoto(fileName: "tall", pixelWidth: 1000, pixelHeight: 2000),
+      CollagePhoto(fileName: "square", pixelWidth: 1000, pixelHeight: 1000),
+    ]
+
+    let horizontal = try XCTUnwrap(
+      LayoutCatalog.templates(photoCount: 3).first { $0.title == "Horizontal Flow" }
+    )
+    XCTAssertEqual(horizontal.family.title, "Flow")
+    task.layoutID = horizontal.id
+    let horizontalSize = LayoutEngine.outputSize(for: task)
+    let horizontalFrames = LayoutEngine.layoutFrames(for: task, in: horizontalSize)
+
+    XCTAssertEqual(horizontalSize, CGSize(width: 3520, height: 1000))
+    XCTAssertEqual(
+      horizontalFrames.map(\.rect),
+      [
+        CGRect(x: 0, y: 0, width: 2000, height: 1000),
+        CGRect(x: 2010, y: 0, width: 500, height: 1000),
+        CGRect(x: 2520, y: 0, width: 1000, height: 1000),
+      ])
+
+    let vertical = try XCTUnwrap(
+      LayoutCatalog.templates(photoCount: 3).first { $0.title == "Vertical Flow" }
+    )
+    task.layoutID = vertical.id
+    let verticalSize = LayoutEngine.outputSize(for: task)
+    let verticalFrames = LayoutEngine.layoutFrames(for: task, in: verticalSize)
+
+    XCTAssertEqual(verticalSize, CGSize(width: 1000, height: 3520))
+    XCTAssertEqual(
+      verticalFrames.map(\.rect),
+      [
+        CGRect(x: 0, y: 0, width: 1000, height: 500),
+        CGRect(x: 0, y: 510, width: 1000, height: 2000),
+        CGRect(x: 0, y: 2520, width: 1000, height: 1000),
+      ])
+    XCTAssertTrue(LayoutEngine.layoutDividers(for: task, in: verticalSize).isEmpty)
+
+    task.layoutID = nil
+    task.layout = .verticalStrip
+    XCTAssertEqual(LayoutEngine.selectedTemplate(for: task).title, "Vertical Flow")
+  }
+
+  func testOversizedFlowExportIsUniformlyScaledToRendererLimits() throws {
+    var task = CollageTask.new(projectID: UUID())
+    task.outputMaxDimension = 8192
+    task.spacing = 0
+    task.photos = (0..<12).map { index in
+      CollagePhoto(fileName: "square-\(index)", pixelWidth: 1000, pixelHeight: 1000)
+    }
+    task.layoutID = try XCTUnwrap(
+      LayoutCatalog.templates(photoCount: task.photos.count).first {
+        $0.title == "Horizontal Flow"
+      }
+    ).id
+
+    let requestedSize = LayoutEngine.outputSize(for: task)
+    let exportSize = CollageRenderer.exportOutputSize(for: task)
+
+    XCTAssertGreaterThan(requestedSize.width, CollageRenderer.maximumSide)
+    XCTAssertLessThanOrEqual(exportSize.width, CollageRenderer.maximumSide)
+    XCTAssertLessThanOrEqual(exportSize.height, CollageRenderer.maximumSide)
+    XCTAssertLessThanOrEqual(
+      exportSize.width * exportSize.height,
+      CollageRenderer.maximumPixelCount
+    )
+    XCTAssertEqual(
+      exportSize.width / exportSize.height,
+      requestedSize.width / requestedSize.height,
+      accuracy: 0.01
+    )
+  }
+
+  func testSavedFlowLayoutKeepsDynamicSizingWhenResolutionChanges() throws {
+    var task = CollageTask.new(projectID: UUID())
+    task.outputMaxDimension = 1000
+    task.spacing = 0
+    task.photos = [
+      CollagePhoto(fileName: "first", pixelWidth: 1600, pixelHeight: 1000),
+      CollagePhoto(fileName: "second", pixelWidth: 900, pixelHeight: 1200),
+    ]
+    task.layoutID = try XCTUnwrap(
+      LayoutCatalog.templates(photoCount: 2).first { $0.title == "Horizontal Flow" }
+    ).id
+    task.savedLayoutSnapshot = try XCTUnwrap(LayoutEngine.savedLayoutSnapshot(for: task))
+
+    XCTAssertEqual(LayoutEngine.outputSize(for: task), CGSize(width: 2350, height: 1000))
+
+    task.outputMaxDimension = 2000
+    XCTAssertEqual(LayoutEngine.outputSize(for: task), CGSize(width: 4700, height: 2000))
+    let frames = LayoutEngine.layoutFrames(for: task, in: LayoutEngine.outputSize(for: task))
+    XCTAssertEqual(frames[0].rect, CGRect(x: 0, y: 0, width: 3200, height: 2000))
+    XCTAssertEqual(frames[1].rect, CGRect(x: 3200, y: 0, width: 1500, height: 2000))
   }
 
   func testExportDownsamplesSourcesToThePixelsTheirFramesNeed() {
@@ -631,10 +748,15 @@ final class LayoutEngineTests: XCTestCase {
         task.layoutColumnWeights = nil
         task.layoutFrameOverrides = nil
         let size = LayoutEngine.outputSize(for: task)
-        XCTAssertFalse(
-          LayoutEngine.layoutDividers(for: task, in: size).isEmpty,
-          "\(template.id) should expose at least one adjustable divider"
-        )
+        let dividers = LayoutEngine.layoutDividers(for: task, in: size)
+        if template.family == .flow {
+          XCTAssertTrue(dividers.isEmpty, "Flow geometry should remain crop-free")
+        } else {
+          XCTAssertFalse(
+            dividers.isEmpty,
+            "\(template.id) should expose at least one adjustable divider"
+          )
+        }
       }
     }
   }
@@ -1230,6 +1352,7 @@ final class LayoutEngineTests: XCTestCase {
     XCTAssertGreaterThanOrEqual(suggestions.count, 3)
     XCTAssertLessThanOrEqual(suggestions.count, 6)
     XCTAssertEqual(Set(suggestions.map(\.id)).count, suggestions.count)
+    XCTAssertFalse(suggestions.contains(where: { $0.family == .flow }))
     XCTAssertTrue(
       suggestions.allSatisfy { suggestion in
         LayoutCatalog.templates(photoCount: task.photos.count).contains(where: {
@@ -1295,6 +1418,7 @@ final class LayoutEngineTests: XCTestCase {
       var candidateTask = task
       candidateTask.canvas = canvas
       let bestFit = LayoutCatalog.templates(photoCount: task.photos.count)
+        .filter { $0.family != .flow }
         .map { LayoutEngine.photoFit(for: $0, task: candidateTask) }
         .max { $0.score < $1.score }!
       return (canvas, bestFit)
