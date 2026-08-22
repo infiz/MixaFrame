@@ -1,10 +1,16 @@
 import Foundation
 import ImageIO
+#if canImport(UIKit)
 import UIKit
+typealias PlatformImage = UIImage
+#elseif canImport(AppKit)
+import AppKit
+typealias PlatformImage = NSImage
+#endif
 
 struct DerivedPhotoImages {
-  let preview: UIImage
-  let thumbnail: UIImage
+  let preview: PlatformImage
+  let thumbnail: PlatformImage
 }
 
 struct ImportedPhotoAsset {
@@ -73,7 +79,7 @@ enum PhotoImagePipeline {
         previewURL: previewURL,
         thumbnailURL: thumbnailURL
       )
-      guard let previewCGImage = images.preview.cgImage else { throw AppError.invalidImage }
+      guard let previewCGImage = cgImage(from: images.preview) else { throw AppError.invalidImage }
       let detection = SubjectDetector.detect(in: previewCGImage)
       let photo = CollagePhoto(
         id: id,
@@ -122,8 +128,8 @@ enum PhotoImagePipeline {
     from source: CGImageSource,
     previewURL: URL,
     thumbnailURL: URL,
-    existingPreview: UIImage? = nil,
-    existingThumbnail: UIImage? = nil
+    existingPreview: PlatformImage? = nil,
+    existingThumbnail: PlatformImage? = nil
   ) throws -> DerivedPhotoImages {
     let preview =
       try existingPreview
@@ -149,7 +155,7 @@ enum PhotoImagePipeline {
     maximumPixelSize: Int,
     destination: URL,
     compressionQuality: CGFloat
-  ) throws -> UIImage {
+  ) throws -> PlatformImage {
     let options: [CFString: Any] = [
       kCGImageSourceCreateThumbnailFromImageAlways: true,
       kCGImageSourceCreateThumbnailWithTransform: true,
@@ -160,17 +166,53 @@ enum PhotoImagePipeline {
     else {
       throw AppError.invalidImage
     }
-    let image = UIImage(cgImage: cgImage)
-    guard let data = image.jpegData(compressionQuality: compressionQuality) else {
+    let image = platformImage(from: cgImage)
+    guard let data = jpegData(from: image, compressionQuality: compressionQuality) else {
       throw AppError.invalidImage
     }
     try data.write(to: destination, options: .atomic)
     return image
   }
 
-  private static func preparedImage(at url: URL) -> UIImage? {
+  private static func preparedImage(at url: URL) -> PlatformImage? {
+#if canImport(UIKit)
     guard let image = UIImage(contentsOfFile: url.path) else { return nil }
     return image.preparingForDisplay() ?? image
+#elseif canImport(AppKit)
+    return NSImage(contentsOf: url)
+#endif
+  }
+
+  private static func platformImage(from cgImage: CGImage) -> PlatformImage {
+#if canImport(UIKit)
+    UIImage(cgImage: cgImage)
+#elseif canImport(AppKit)
+    NSImage(cgImage: cgImage, size: .zero)
+#endif
+  }
+
+  private static func jpegData(
+    from image: PlatformImage,
+    compressionQuality: CGFloat
+  ) -> Data? {
+#if canImport(UIKit)
+    image.jpegData(compressionQuality: compressionQuality)
+#elseif canImport(AppKit)
+    guard let cgImage = cgImage(from: image) else { return nil }
+    return NSBitmapImageRep(cgImage: cgImage).representation(
+      using: .jpeg,
+      properties: [.compressionFactor: compressionQuality]
+    )
+#endif
+  }
+
+  private static func cgImage(from image: PlatformImage) -> CGImage? {
+#if canImport(UIKit)
+    image.cgImage
+#elseif canImport(AppKit)
+    var rect = CGRect(origin: .zero, size: image.size)
+    return image.cgImage(forProposedRect: &rect, context: nil, hints: nil)
+#endif
   }
 
   private static func orientedPixelDimensions(from source: CGImageSource) throws -> (

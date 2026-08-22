@@ -1,17 +1,17 @@
 import CoreGraphics
 import Foundation
 
-struct CollageProject: Identifiable, Codable, Hashable {
+struct Collection: Identifiable, Codable, Hashable {
   var id = UUID()
   var name: String
   var createdAt = Date()
   var modifiedAt = Date()
-  var tasks: [CollageTask] = []
+  var projects: [Project] = []
 }
 
-struct CollageTask: Identifiable, Codable, Hashable {
+struct Project: Identifiable, Codable, Hashable {
   var id = UUID()
-  var projectID: UUID
+  var collectionID: UUID
   var name: String
   var createdAt = Date()
   var modifiedAt = Date()
@@ -74,9 +74,9 @@ struct CollageTask: Identifiable, Codable, Hashable {
     latestExportFileName = nil
   }
 
-  static func new(projectID: UUID) -> CollageTask {
-    CollageTask(
-      projectID: projectID,
+  static func new(collectionID: UUID) -> Project {
+    Project(
+      collectionID: collectionID,
       name: "",
       cornerRadiusPercent: 0
     )
@@ -87,38 +87,38 @@ enum MixaFrameExportPreferences {
   private static let formatKey = "exportPreferences.outputFormat"
   private static let qualityKey = "exportPreferences.outputQuality"
   private static let resolutionKey = "exportPreferences.outputMaxDimension"
-  private static let backgroundKey = "exportPreferences.collageBackground"
+  private static let backgroundKey = "exportPreferences.projectBackground"
   private static let spacingKey = "exportPreferences.layoutSpacing"
   private static let canvasCornerRadiusKey = "exportPreferences.canvasCornerRadius"
 
   static func apply(
-    to task: inout CollageTask,
+    to project: inout Project,
     defaults: UserDefaults = .standard
   ) {
     if let rawFormat = defaults.string(forKey: formatKey),
       let format = OutputFormat(rawValue: rawFormat)
     {
-      task.outputFormat = format
+      project.outputFormat = format
     }
     if let rawQuality = defaults.string(forKey: qualityKey),
       let quality = OutputQuality(rawValue: rawQuality)
     {
-      task.quality = quality
+      project.quality = quality
     }
     let resolution = defaults.integer(forKey: resolutionKey)
     if (512...8192).contains(resolution) {
-      task.outputMaxDimension = resolution
+      project.outputMaxDimension = resolution
     }
     if let rawBackground = defaults.string(forKey: backgroundKey),
       let background = CollageBackground(rawValue: rawBackground)
     {
-      task.background = background
+      project.background = background
     }
     if defaults.object(forKey: spacingKey) != nil {
-      task.spacing = min(40, max(0, defaults.double(forKey: spacingKey)))
+      project.spacing = min(40, max(0, defaults.double(forKey: spacingKey)))
     }
     if defaults.object(forKey: canvasCornerRadiusKey) != nil {
-      task.canvasCornerRadius = defaults.double(forKey: canvasCornerRadiusKey)
+      project.canvasCornerRadius = defaults.double(forKey: canvasCornerRadiusKey)
     }
   }
 
@@ -147,7 +147,7 @@ enum MixaFrameExportPreferences {
   }
 }
 
-struct CollageTaskEditorState: Equatable {
+struct ProjectEditorState: Equatable {
   let name: String
   let photos: [CollagePhotoEditorState]
   let layout: CollageLayout
@@ -181,9 +181,9 @@ struct CollagePhotoEditorState: Equatable {
   let zoom: Double
 }
 
-extension CollageTask {
-  var editorState: CollageTaskEditorState {
-    CollageTaskEditorState(
+extension Project {
+  var editorState: ProjectEditorState {
+    ProjectEditorState(
       name: name,
       photos: photos.map {
         CollagePhotoEditorState(
@@ -218,8 +218,8 @@ extension CollageTask {
     )
   }
 
-  func hasUserChanges(comparedTo savedTask: CollageTask) -> Bool {
-    editorState != savedTask.editorState
+  func hasUserChanges(comparedTo savedProject: Project) -> Bool {
+    editorState != savedProject.editorState
   }
 
   mutating func resetPhotosForAutomaticFit() {

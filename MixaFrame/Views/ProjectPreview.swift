@@ -2,8 +2,8 @@ import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
 
-struct CollagePreview: View {
-  let task: CollageTask
+struct ProjectPreview: View {
+  let project: Project
   let imageLoader: (CollagePhoto) -> UIImage?
   let onViewPhoto: (UUID) -> Void
   let onMovePhoto: (UUID, UUID) -> Void
@@ -13,11 +13,11 @@ struct CollagePreview: View {
   var onAdjustLayoutDivider: (LayoutDivider, Double) -> Void = { _, _ in }
   var maximumHeight: CGFloat = 480
 
-  private var outputSize: CGSize { LayoutEngine.outputSize(for: task) }
+  private var outputSize: CGSize { LayoutEngine.outputSize(for: project) }
 
   var body: some View {
     Group {
-      if task.photos.isEmpty {
+      if project.photos.isEmpty {
         GeometryReader { proxy in
           let side = min(proxy.size.width, proxy.size.height)
           RoundedRectangle(cornerRadius: 16)
@@ -31,14 +31,14 @@ struct CollagePreview: View {
             .position(x: proxy.size.width / 2, y: proxy.size.height / 2)
         }
         .frame(height: maximumHeight)
-      } else if let flowAxis = LayoutEngine.flowAxis(for: task) {
+      } else if let flowAxis = LayoutEngine.flowAxis(for: project) {
         GeometryReader { proxy in
           if flowAxis == .vertical {
             ScrollView(.vertical) {
               let width = proxy.size.width
               let height = width * outputSize.height / max(outputSize.width, 1)
               CollageCanvasContent(
-                task: task,
+                project: project,
                 displaySize: CGSize(width: width, height: height),
                 imageLoader: imageLoader,
                 onViewPhoto: onViewPhoto,
@@ -55,7 +55,7 @@ struct CollagePreview: View {
               let height = proxy.size.height
               let width = height * outputSize.width / max(outputSize.height, 1)
               CollageCanvasContent(
-                task: task,
+                project: project,
                 displaySize: CGSize(width: width, height: height),
                 imageLoader: imageLoader,
                 onViewPhoto: onViewPhoto,
@@ -74,7 +74,7 @@ struct CollagePreview: View {
         GeometryReader { proxy in
           let canvasSize = aspectFitSize(content: outputSize, container: proxy.size)
           CollageCanvasContent(
-            task: task,
+            project: project,
             displaySize: canvasSize,
             imageLoader: imageLoader,
             onViewPhoto: onViewPhoto,
@@ -89,20 +89,20 @@ struct CollagePreview: View {
         .frame(height: maximumHeight)
       }
     }
-    .animation(.easeInOut(duration: 0.2), value: task.layoutID)
-    .animation(.easeInOut(duration: 0.2), value: task.canvas)
-    .accessibilityLabel("Collage preview with \(task.photos.count) photos")
+    .animation(.easeInOut(duration: 0.2), value: project.layoutID)
+    .animation(.easeInOut(duration: 0.2), value: project.canvas)
+    .accessibilityLabel("Project preview with \(project.photos.count) photos")
   }
 }
 
-struct CollageTaskThumbnail: View {
-  let task: CollageTask
+struct ProjectThumbnail: View {
+  let project: Project
   let persistedImage: UIImage?
   let imageLoader: (CollagePhoto) -> UIImage?
 
   var body: some View {
     GeometryReader { proxy in
-      let outputSize = LayoutEngine.outputSize(for: task)
+      let outputSize = LayoutEngine.outputSize(for: project)
       let canvasSize = aspectFitSize(content: outputSize, container: proxy.size)
 
       ZStack {
@@ -113,12 +113,12 @@ struct CollageTaskThumbnail: View {
             .scaledToFit()
             .frame(width: canvasSize.width, height: canvasSize.height)
         } else {
-          PassiveCollageCanvas(task: task, displaySize: canvasSize, imageLoader: imageLoader)
+          PassiveCollageCanvas(project: project, displaySize: canvasSize, imageLoader: imageLoader)
             .frame(width: canvasSize.width, height: canvasSize.height)
         }
 
-        if persistedImage == nil && !task.photos.isEmpty
-          && !task.photos.contains(where: { imageLoader($0) != nil })
+        if persistedImage == nil && !project.photos.isEmpty
+          && !project.photos.contains(where: { imageLoader($0) != nil })
         {
           ProgressView().controlSize(.mini)
         }
@@ -142,19 +142,19 @@ private func aspectFitSize(content: CGSize, container: CGSize) -> CGSize {
 }
 
 private struct PassiveCollageCanvas: View {
-  let task: CollageTask
+  let project: Project
   let displaySize: CGSize
   let imageLoader: (CollagePhoto) -> UIImage?
 
   var body: some View {
-    let outputSize = LayoutEngine.outputSize(for: task)
-    let frames = LayoutEngine.layoutFrames(for: task, in: outputSize)
+    let outputSize = LayoutEngine.outputSize(for: project)
+    let frames = LayoutEngine.layoutFrames(for: project, in: outputSize)
     let scaleX = displaySize.width / max(outputSize.width, 1)
     let scaleY = displaySize.height / max(outputSize.height, 1)
 
     ZStack(alignment: .topLeading) {
-      Color(uiColor: UIColor(hex: task.backgroundHex))
-      ForEach(Array(task.photos.enumerated()), id: \.element.id) { index, photo in
+      Color(uiColor: UIColor(hex: project.backgroundHex))
+      ForEach(Array(project.photos.enumerated()), id: \.element.id) { index, photo in
         if index < frames.count {
           let layoutFrame = frames[index]
           let sourceFrame = layoutFrame.rect
@@ -186,11 +186,11 @@ private struct PassiveCollageCanvas: View {
       }
     }
     .clipShape(
-      LayoutFrameShape(cornerRadiusFraction: CGFloat(task.canvasCornerRadius / 100))
+      LayoutFrameShape(cornerRadiusFraction: CGFloat(project.canvasCornerRadius / 100))
     )
     .background {
-      if !task.outputFormat.supportsTransparency {
-        Color(uiColor: UIColor(hex: task.backgroundHex))
+      if !project.outputFormat.supportsTransparency {
+        Color(uiColor: UIColor(hex: project.backgroundHex))
       }
     }
     .clipped()
@@ -198,7 +198,7 @@ private struct PassiveCollageCanvas: View {
 }
 
 private struct CollageCanvasContent: View {
-  let task: CollageTask
+  let project: Project
   let displaySize: CGSize
   let imageLoader: (CollagePhoto) -> UIImage?
   let onViewPhoto: (UUID) -> Void
@@ -213,14 +213,14 @@ private struct CollageCanvasContent: View {
   @State private var selectedFlowPhotoID: UUID?
 
   var body: some View {
-    let outputSize = LayoutEngine.outputSize(for: task)
-    let sourceFrames = LayoutEngine.layoutFrames(for: task, in: outputSize)
+    let outputSize = LayoutEngine.outputSize(for: project)
+    let sourceFrames = LayoutEngine.layoutFrames(for: project, in: outputSize)
     let scaleX = displaySize.width / max(outputSize.width, 1)
     let scaleY = displaySize.height / max(outputSize.height, 1)
 
     ZStack(alignment: .topLeading) {
-      Color(uiColor: UIColor(hex: task.backgroundHex))
-      ForEach(Array(task.photos.enumerated()), id: \.element.id) { index, photo in
+      Color(uiColor: UIColor(hex: project.backgroundHex))
+      ForEach(Array(project.photos.enumerated()), id: \.element.id) { index, photo in
         if index < sourceFrames.count {
           let sourceLayoutFrame = sourceFrames[index]
           let sourceFrame = sourceLayoutFrame.rect
@@ -234,7 +234,7 @@ private struct CollageCanvasContent: View {
             normalizedClipPolygon: sourceLayoutFrame.normalizedClipPolygon,
             rotationDegrees: sourceLayoutFrame.rotationDegrees,
             frameSize: frame.size,
-            usesFlowDragAndDrop: LayoutEngine.isFlowLayout(task),
+            usesFlowDragAndDrop: LayoutEngine.isFlowLayout(project),
             isFlowPhotoSelected: selectedFlowPhotoID == photo.id,
             onViewPhoto: { onViewPhoto(photo.id) },
             onSelectFlowPhoto: {
@@ -286,7 +286,7 @@ private struct CollageCanvasContent: View {
         }
       }
 
-      ForEach(LayoutEngine.layoutDividers(for: task, in: outputSize)) { divider in
+      ForEach(LayoutEngine.layoutDividers(for: project, in: outputSize)) { divider in
         let displayDivider = LayoutDivider(
           axis: divider.axis,
           rowIndex: divider.rowIndex,
@@ -315,10 +315,10 @@ private struct CollageCanvasContent: View {
       }
 
       if let swapDragPreview,
-        let sourceIndex = task.photos.firstIndex(where: { $0.id == swapDragPreview.photoID }),
+        let sourceIndex = project.photos.firstIndex(where: { $0.id == swapDragPreview.photoID }),
         sourceIndex < sourceFrames.count
       {
-        let photo = task.photos[sourceIndex]
+        let photo = project.photos[sourceIndex]
         let layoutFrame = sourceFrames[sourceIndex]
         let sourceRect = layoutFrame.rect
         let displayFrameSize = sourceRect.scaled(x: scaleX, y: scaleY).size
@@ -345,15 +345,15 @@ private struct CollageCanvasContent: View {
       }
     }
     .clipShape(
-      LayoutFrameShape(cornerRadiusFraction: CGFloat(task.canvasCornerRadius / 100))
+      LayoutFrameShape(cornerRadiusFraction: CGFloat(project.canvasCornerRadius / 100))
     )
     .background {
-      if !task.outputFormat.supportsTransparency {
-        Color(uiColor: UIColor(hex: task.backgroundHex))
+      if !project.outputFormat.supportsTransparency {
+        Color(uiColor: UIColor(hex: project.backgroundHex))
       }
     }
     .clipped()
-    .coordinateSpace(name: "collageCanvas")
+    .coordinateSpace(name: "projectCanvas")
   }
 
   private func floatingPreviewSize(for sourceSize: CGSize) -> CGSize {
@@ -387,8 +387,8 @@ private struct CollageCanvasContent: View {
     scaleX: CGFloat,
     scaleY: CGFloat
   ) -> UUID? {
-    for index in task.photos.indices.reversed() where index < frames.count {
-      let candidate = task.photos[index]
+    for index in project.photos.indices.reversed() where index < frames.count {
+      let candidate = project.photos[index]
       guard candidate.id != sourcePhotoID else { continue }
       let layoutFrame = frames[index]
       let displayRect = layoutFrame.rect.scaled(x: scaleX, y: scaleY)
@@ -465,7 +465,7 @@ private struct LayoutDividerHandle: View {
   }
 
   private var dragGesture: some Gesture {
-    DragGesture(minimumDistance: 0, coordinateSpace: .named("collageCanvas"))
+    DragGesture(minimumDistance: 0, coordinateSpace: .named("projectCanvas"))
       .onChanged { value in
         guard let lastDragLocation else {
           draggedDivider = sourceDivider
@@ -638,7 +638,7 @@ private struct InteractivePhotoFrame: View {
   }
 
   private var photoDragGesture: some Gesture {
-    DragGesture(minimumDistance: 3, coordinateSpace: .named("collageCanvas"))
+    DragGesture(minimumDistance: 3, coordinateSpace: .named("projectCanvas"))
       .onChanged { value in
         guard zoomStart == nil else { return }
         if dragStart == nil {

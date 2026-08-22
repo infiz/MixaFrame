@@ -4,13 +4,15 @@ import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
 
-struct CollageEditorView: View {
+struct ProjectEditorView: View {
   @EnvironmentObject private var store: AppStore
   @EnvironmentObject private var subscriptions: SubscriptionStore
   @Environment(\.dismiss) private var dismiss
-  @State private var draft: CollageTask
-  @State private var savedSnapshot: CollageTask
+  @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+  @State private var draft: Project
+  @State private var savedSnapshot: Project
   @State private var pickerItems: [PhotosPickerItem] = []
+  @State private var showingExpandedPhotoPicker = false
   @State private var isImporting = false
   @State private var isSaving = false
   @State private var isExporting = false
@@ -31,29 +33,29 @@ struct CollageEditorView: View {
   @State private var isPhotoExportChoicePresented = false
   @State private var pendingPhotoLibraryExportMode: PhotoLibraryExportMode?
 
-  init(projectID: UUID, task: CollageTask?) {
-    let initialTask = Self.initialDraft(projectID: projectID, task: task)
-    _draft = State(initialValue: initialTask)
-    _savedSnapshot = State(initialValue: initialTask)
-    _isControlsHidden = State(initialValue: task != nil)
+  init(collectionID: UUID, project: Project?) {
+    let initialProject = Self.initialDraft(collectionID: collectionID, project: project)
+    _draft = State(initialValue: initialProject)
+    _savedSnapshot = State(initialValue: initialProject)
+    _isControlsHidden = State(initialValue: project != nil)
     _activeEditorTool = State(initialValue: .photos)
     _selectedLayoutFamily = State(
-      initialValue: LayoutEngine.selectedTemplate(for: initialTask).family.browserFamily)
+      initialValue: LayoutEngine.selectedTemplate(for: initialProject).family.browserFamily)
   }
 
   static func initialDraft(
-    projectID: UUID,
-    task: CollageTask?,
+    collectionID: UUID,
+    project: Project?,
     defaults: UserDefaults = .standard
-  ) -> CollageTask {
-    if let task { return task }
-    var draft = CollageTask.new(projectID: projectID)
+  ) -> Project {
+    if let project { return project }
+    var draft = Project.new(collectionID: collectionID)
     MixaFrameExportPreferences.apply(to: &draft, defaults: defaults)
     return draft
   }
 
   private var exportPreferenceSnapshot: ExportPreferenceSnapshot {
-    ExportPreferenceSnapshot(task: draft)
+    ExportPreferenceSnapshot(project: draft)
   }
 
   var body: some View {
@@ -62,7 +64,7 @@ struct CollageEditorView: View {
         unsavedChangesSheet
       }
       .sheet(isPresented: $isSaveChoicePresented) {
-        saveCollageSheet
+        saveProjectSheet
       }
       .sheet(isPresented: $isPhotoExportChoicePresented, onDismiss: completePhotoExportChoice) {
         if let identifier = draft.exportedPhotoLibraryAssetIdentifier {
@@ -151,7 +153,7 @@ struct CollageEditorView: View {
     .presentationDragIndicator(.visible)
   }
 
-  private var saveCollageSheet: some View {
+  private var saveProjectSheet: some View {
     NavigationStack {
       VStack(alignment: .leading, spacing: 14) {
         Button {
@@ -183,7 +185,7 @@ struct CollageEditorView: View {
       }
       .padding(20)
       .frame(maxHeight: .infinity, alignment: .top)
-      .navigationTitle("Save Collage")
+      .navigationTitle("Save Project")
       .navigationBarTitleDisplayMode(.inline)
     }
     .presentationDetents([.height(250)])
@@ -208,7 +210,7 @@ struct CollageEditorView: View {
     case .discard:
       let discardedDraft = draft
       Task {
-        await store.discardUnsavedPhotoFiles(from: discardedDraft)
+        await store.discardUnsavedProjectFiles(from: discardedDraft)
         dismiss()
       }
     case .subscribe:
@@ -284,7 +286,7 @@ struct CollageEditorView: View {
             }
           }
           .buttonStyle(.plain)
-          .accessibilityLabel("Edit collage title")
+          .accessibilityLabel("Edit project title")
           .disabled(isImporting || isSaving || isExporting)
         }
         ToolbarItemGroup(placement: .topBarTrailing) {
@@ -307,7 +309,7 @@ struct CollageEditorView: View {
           ZStack {
             Color.black.opacity(0.18).ignoresSafeArea()
             VStack(spacing: 14) {
-              Text("Saving collage…").font(.headline)
+              Text("Saving project…").font(.headline)
               ProgressView()
                 .progressViewStyle(.linear)
                 .frame(width: 220)
@@ -320,7 +322,7 @@ struct CollageEditorView: View {
             Color.black.opacity(0.18).ignoresSafeArea()
             VStack(spacing: 12) {
               ProgressView().controlSize(.large)
-              Text("Rendering full-resolution collage…").font(.headline)
+              Text("Rendering full-resolution project…").font(.headline)
             }
             .padding(24)
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18))
@@ -361,8 +363,16 @@ struct CollageEditorView: View {
           onAdjustCropZoom: { adjustZoom(photoID: photo.id, zoom: $0) }
         )
       }
-      .alert("Edit Collage Title", isPresented: $isRenamePresented) {
-        TextField("Collage title", text: $pendingTitle)
+      .fullScreenCover(isPresented: $showingExpandedPhotoPicker) {
+        ExpandedPhotoPicker(selectionLimit: max(0, 12 - draft.photos.count)) { selections in
+          showingExpandedPhotoPicker = false
+          guard !selections.isEmpty else { return }
+          importPhotos(selections)
+        }
+        .ignoresSafeArea()
+      }
+      .alert("Edit Project Title", isPresented: $isRenamePresented) {
+        TextField("Project title", text: $pendingTitle)
         Button("Cancel", role: .cancel) {}
         Button("Done") {
           let title = pendingTitle.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -372,7 +382,7 @@ struct CollageEditorView: View {
         }
         .disabled(pendingTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
       } message: {
-        Text("Enter the title shown for this collage task.")
+        Text("Enter the title shown for this project.")
       }
       .alert(item: $message) { message in
         Alert(
@@ -393,15 +403,15 @@ struct CollageEditorView: View {
         Button("Cancel", role: .cancel) { pendingExportAction = nil }
       } message: {
         Text(
-          "This collage has changed since it was last saved. Save now so the exported image and saved task stay in sync."
+          "This project has changed since it was last saved. Save now so the exported image and saved project stay in sync."
         )
       }
     }
   }
 
   private func previewWorkspace(maximumHeight: CGFloat) -> some View {
-    CollagePreview(
-      task: draft,
+    ProjectPreview(
+      project: draft,
       imageLoader: store.previewImage(for:),
       onViewPhoto: { showOriginalPhoto(id: $0) },
       onMovePhoto: { swapPhotos(sourceID: $0, targetID: $1) },
@@ -419,16 +429,20 @@ struct CollageEditorView: View {
   @ViewBuilder
   private func editorControls(availableSize: CGSize) -> some View {
     let isLandscape = availableSize.width > availableSize.height
-    let panelWidth = min(680, max(1, availableSize.width - 16))
+    let panelWidth =
+      usesExpandedLayout
+      ? max(1, availableSize.width - 32)
+      : min(680, max(1, availableSize.width - 16))
     let defaultControlsHeight = availableSize.height * 0.5 - 8
     let availableControlsHeight =
       availableSize.height
       - previewMaximumHeight(for: availableSize)
       - editorPortraitReservedVerticalSpace
+    let maximumControlsHeight: CGFloat = usesExpandedLayout ? .infinity : 520
     let controlsHeight = max(
       editorMinimumControlsHeight,
       min(
-        520,
+        maximumControlsHeight,
         usesSquareCanvas ? availableControlsHeight : defaultControlsHeight
       )
     )
@@ -437,7 +451,10 @@ struct CollageEditorView: View {
 
     if isLandscape {
       let landscapePanelWidth = landscapeSettingsPanelWidth(for: availableSize)
-      let landscapeControlsHeight = min(520, max(180, availableSize.height - 16))
+      let landscapeControlsHeight = min(
+        usesExpandedLayout ? .infinity : 520,
+        max(180, availableSize.height - 16)
+      )
 
       ZStack(alignment: .trailing) {
         HStack(spacing: 8) {
@@ -494,6 +511,8 @@ struct CollageEditorView: View {
           - editorPortraitReservedVerticalSpace
       )
       defaultHeight = min(fullWidthSquare, heightBeforeControls)
+    } else if usesExpandedLayout {
+      defaultHeight = max(220, availableSize.height * 0.48)
     } else {
       defaultHeight = max(140, availableSize.height * 0.42)
     }
@@ -510,7 +529,14 @@ struct CollageEditorView: View {
   }
 
   private func landscapeSettingsPanelWidth(for availableSize: CGSize) -> CGFloat {
-    min(420, max(260, availableSize.width * 0.42))
+    if usesExpandedLayout {
+      return min(520, max(340, availableSize.width * 0.36))
+    }
+    return min(420, max(260, availableSize.width * 0.42))
+  }
+
+  private var usesExpandedLayout: Bool {
+    horizontalSizeClass == .regular
   }
 
   private var usesSquareCanvas: Bool {
@@ -518,7 +544,7 @@ struct CollageEditorView: View {
     return abs(outputSize.width - outputSize.height) < 0.5
   }
 
-  private var editorMinimumControlsHeight: CGFloat { 180 }
+  private var editorMinimumControlsHeight: CGFloat { usesExpandedLayout ? 240 : 180 }
   private var editorPortraitReservedVerticalSpace: CGFloat { 24 }
   private var editorLandscapeToolbarWidth: CGFloat { 54 }
 
@@ -652,13 +678,24 @@ struct CollageEditorView: View {
               .foregroundStyle(.secondary)
               .monospacedDigit()
 
-            PhotosPicker(
-              selection: $pickerItems,
-              maxSelectionCount: max(0, 12 - draft.photos.count),
-              matching: .images
-            ) {
-              Text("Add Photos")
-                .font(.subheadline.weight(.semibold))
+            Group {
+              if UIDevice.current.userInterfaceIdiom == .pad {
+                Button {
+                  showingExpandedPhotoPicker = true
+                } label: {
+                  Text("Add Photos")
+                    .font(.subheadline.weight(.semibold))
+                }
+              } else {
+                PhotosPicker(
+                  selection: $pickerItems,
+                  maxSelectionCount: max(0, 12 - draft.photos.count),
+                  matching: .images
+                ) {
+                  Text("Add Photos")
+                    .font(.subheadline.weight(.semibold))
+                }
+              }
             }
             .offset(y: 1)
             .disabled(isImporting || draft.photos.count >= 12)
@@ -722,7 +759,7 @@ struct CollageEditorView: View {
         .foregroundStyle(.secondary)
 
       Toggle(
-        "Collage Background",
+        "Project Background",
         isOn: Binding(
           get: { draft.background == .dark },
           set: { draft.background = $0 ? .dark : .white }
@@ -733,7 +770,7 @@ struct CollageEditorView: View {
       .controlSize(.small)
     }
     .accessibilityElement(children: .combine)
-    .accessibilityLabel("Collage Background")
+    .accessibilityLabel("Project Background")
     .accessibilityValue(draft.background.title)
   }
 
@@ -1063,7 +1100,7 @@ struct CollageEditorView: View {
           family,
           LayoutEngine.fittingLayoutSamples(
             family: family,
-            task: draft
+            project: draft
           )
         )
       }
@@ -1123,7 +1160,7 @@ struct CollageEditorView: View {
                 VStack(spacing: 4) {
                   LayoutThumbnail(
                     template: selectedTemplate.id == template.id ? selectedTemplate : template,
-                    task: draft,
+                    project: draft,
                     isSelected: selectedTemplate.id == template.id
                   )
                   Text(template.title)
@@ -1319,7 +1356,7 @@ struct CollageEditorView: View {
 
   @discardableResult
   private func saveDraft() async -> Bool {
-    guard let savedDraft = await store.saveTask(draft) else { return false }
+    guard let savedDraft = await store.saveProject(draft) else { return false }
     draft = savedDraft
     savedSnapshot = savedDraft
     return true
@@ -1447,6 +1484,64 @@ struct CollageEditorView: View {
     }
   }
 
+  private func importPhotos(_ selections: [ExpandedPhotoSelection]) {
+    isImporting = true
+    Task {
+      var failures = 0
+      var didImportPhotos = false
+      for batchStart in stride(from: 0, to: selections.count, by: 2) {
+        let indexes = Array(batchStart..<min(batchStart + 2, selections.count))
+        let outcomes = await withTaskGroup(of: (Int, CollagePhoto?).self) { group in
+          for index in indexes {
+            let selection = selections[index]
+            group.addTask {
+              do {
+                guard
+                  let transferredFile = try await loadImportedPhotoFile(
+                    from: selection.itemProvider
+                  )
+                else {
+                  return (index, nil)
+                }
+                defer { try? FileManager.default.removeItem(at: transferredFile.url) }
+                return (
+                  index,
+                  try await store.importPhotoFile(
+                    at: transferredFile.url,
+                    photoLibraryAssetIdentifier: selection.assetIdentifier
+                  )
+                )
+              } catch {
+                return (index, nil)
+              }
+            }
+          }
+          var results: [(Int, CollagePhoto?)] = []
+          for await result in group { results.append(result) }
+          return results.sorted { $0.0 < $1.0 }
+        }
+        let importedPhotos = outcomes.compactMap(\.1)
+        failures += outcomes.count - importedPhotos.count
+        if !importedPhotos.isEmpty {
+          didImportPhotos = true
+          draft.clearLayoutCustomization(invalidateExport: true)
+          draft.clearCustomLayout()
+          draft.clearSavedLayoutSnapshot()
+          draft.photos.append(contentsOf: importedPhotos)
+        }
+      }
+      if didImportPhotos {
+        applyAutomaticRecommendations()
+      }
+      isImporting = false
+      if failures > 0 {
+        message = EditorMessage(
+          title: "Some Photos Weren't Added",
+          detail: "\(failures) selected item(s) could not be read.")
+      }
+    }
+  }
+
   private func applyAutomaticRecommendations() {
     draft.isPhotoOrderManuallyAdjusted = false
     draft.clearLayoutCustomization()
@@ -1493,7 +1588,7 @@ struct CollageEditorView: View {
   private func swapPhotos(sourceID: UUID, targetID: UUID) {
     lockCurrentAutomaticArrangement()
     withAnimation(.easeInOut(duration: 0.2)) {
-      draft.swapPhotosForAutomaticFit(sourceID: sourceID, targetID: targetID)
+      _ = draft.swapPhotosForAutomaticFit(sourceID: sourceID, targetID: targetID)
     }
   }
 
@@ -1557,19 +1652,19 @@ struct CollageEditorView: View {
   private func beginExport(destination: ExportDestination) {
     guard draft.photos.count >= 2 else { return }
     isExporting = true
-    let task = draft
+    let project = draft
     let photoDirectory = store.photoDirectory
-    let projectName = store.project(id: task.projectID)?.name ?? "Project"
+    let collectionName = store.collection(id: project.collectionID)?.name ?? "Collection"
     let includesWatermark = !subscriptions.hasPremiumAccess
 
     Task {
       do {
-        try await store.restoreOriginalsIfNeeded(for: task.photos)
+        try await store.restoreOriginalsIfNeeded(for: project.photos)
         let export = try await Task.detached(priority: .userInitiated) {
           try CollageRenderer.prepareExport(
-            task: task,
+            project: project,
             photoDirectory: photoDirectory,
-            projectName: projectName,
+            collectionName: collectionName,
             includesWatermark: includesWatermark
           )
         }.value
@@ -1580,7 +1675,7 @@ struct CollageEditorView: View {
           try await savePreparedExportToPhotos(
             export,
             mode: mode,
-            successDetail: "Your full-resolution collage is now in the Photo Library."
+            successDetail: "Your full-resolution project is now in the Photo Library."
           )
         }
       } catch {
@@ -1594,7 +1689,7 @@ struct CollageEditorView: View {
   private func savePreparedExportToPhotos(
     _ export: PreparedCollageExport,
     mode: PhotoLibraryExportMode,
-    successDetail: String = "Your reviewed full-resolution collage is now in the Photo Library."
+    successDetail: String = "Your reviewed full-resolution project is now in the Photo Library."
   ) async throws {
     switch mode {
     case .createNew:
@@ -1663,6 +1758,62 @@ private struct ImportedPhotoFile: Transferable {
   }
 }
 
+private struct ExpandedPhotoSelection: @unchecked Sendable {
+  let itemProvider: NSItemProvider
+  let assetIdentifier: String?
+
+  init(_ result: PHPickerResult) {
+    itemProvider = result.itemProvider
+    assetIdentifier = result.assetIdentifier
+  }
+}
+
+private struct ExpandedPhotoPicker: UIViewControllerRepresentable {
+  let selectionLimit: Int
+  let onFinish: ([ExpandedPhotoSelection]) -> Void
+
+  func makeCoordinator() -> Coordinator {
+    Coordinator(onFinish: onFinish)
+  }
+
+  func makeUIViewController(context: Context) -> PHPickerViewController {
+    var configuration = PHPickerConfiguration(photoLibrary: .shared())
+    configuration.filter = .images
+    configuration.selectionLimit = max(1, selectionLimit)
+    configuration.selection = .ordered
+    configuration.preferredAssetRepresentationMode = .current
+    configuration.mode = .default
+
+    let picker = PHPickerViewController(configuration: configuration)
+    picker.delegate = context.coordinator
+    return picker
+  }
+
+  func updateUIViewController(_ uiViewController: PHPickerViewController, context: Context) {}
+
+  final class Coordinator: NSObject, PHPickerViewControllerDelegate {
+    let onFinish: ([ExpandedPhotoSelection]) -> Void
+
+    init(onFinish: @escaping ([ExpandedPhotoSelection]) -> Void) {
+      self.onFinish = onFinish
+    }
+
+    func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
+      onFinish(results.map(ExpandedPhotoSelection.init))
+    }
+  }
+}
+
+private func loadImportedPhotoFile(from provider: NSItemProvider) async throws
+  -> ImportedPhotoFile?
+{
+  try await withCheckedThrowingContinuation { continuation in
+    _ = provider.loadTransferable(type: ImportedPhotoFile.self) { result in
+      continuation.resume(with: result)
+    }
+  }
+}
+
 private struct ExportPreferenceSnapshot: Equatable {
   let outputFormat: OutputFormat
   let quality: OutputQuality
@@ -1671,13 +1822,13 @@ private struct ExportPreferenceSnapshot: Equatable {
   let spacing: Double
   let canvasCornerRadius: Double
 
-  init(task: CollageTask) {
-    outputFormat = task.outputFormat
-    quality = task.quality
-    outputMaxDimension = task.outputMaxDimension
-    background = task.background
-    spacing = task.spacing
-    canvasCornerRadius = task.canvasCornerRadius
+  init(project: Project) {
+    outputFormat = project.outputFormat
+    quality = project.quality
+    outputMaxDimension = project.outputMaxDimension
+    background = project.background
+    spacing = project.spacing
+    canvasCornerRadius = project.canvasCornerRadius
   }
 
   func save() {
@@ -1692,25 +1843,25 @@ private struct ExportPreferenceSnapshot: Equatable {
 
 private struct LayoutThumbnail: View {
   let template: CollageLayoutTemplate
-  let task: CollageTask
+  let project: Project
   let isSelected: Bool
 
   private let displaySize = CGSize(width: 76, height: 52)
 
   var body: some View {
     let logicalSize: CGSize = {
-      guard !isSelected else { return LayoutEngine.outputSize(for: task) }
-      var previewTask = task
-      previewTask.layoutID = template.id
-      previewTask.mainPhotoCount = LayoutEngine.mainPhotoCount(for: template)
-      previewTask.clearLayoutCustomization()
-      previewTask.clearCustomLayout()
-      previewTask.clearSavedLayoutSnapshot()
-      return LayoutEngine.outputSize(for: previewTask)
+      guard !isSelected else { return LayoutEngine.outputSize(for: project) }
+      var previewProject = project
+      previewProject.layoutID = template.id
+      previewProject.mainPhotoCount = LayoutEngine.mainPhotoCount(for: template)
+      previewProject.clearLayoutCustomization()
+      previewProject.clearCustomLayout()
+      previewProject.clearSavedLayoutSnapshot()
+      return LayoutEngine.outputSize(for: previewProject)
     }()
     let frames = LayoutEngine.previewFrames(
       template: template,
-      task: task,
+      project: project,
       in: logicalSize,
       preservesCurrentAdjustments: isSelected
     )
@@ -1726,7 +1877,7 @@ private struct LayoutThumbnail: View {
 
     ZStack(alignment: .topLeading) {
       Color(uiColor: .tertiarySystemBackground)
-      Color(uiColor: UIColor(hex: task.backgroundHex))
+      Color(uiColor: UIColor(hex: project.backgroundHex))
         .frame(width: canvasSize.width, height: canvasSize.height)
         .offset(x: canvasOrigin.x, y: canvasOrigin.y)
       ForEach(Array(frames.enumerated()), id: \.offset) { index, layoutFrame in

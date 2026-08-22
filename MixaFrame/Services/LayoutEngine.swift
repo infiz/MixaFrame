@@ -71,13 +71,13 @@ enum LayoutEngine {
     let spacing: Double
     let photos: [LayoutSamplePhotoKey]
 
-    init(family: LayoutFamily, mainPhotoCount: Int?, task: CollageTask) {
+    init(family: LayoutFamily, mainPhotoCount: Int?, project: Project) {
       self.family = family.rawValue
       self.mainPhotoCount = mainPhotoCount
-      canvas = task.canvas.rawValue
-      outputMaxDimension = task.outputMaxDimension
-      spacing = task.spacing
-      photos = task.photos.map(LayoutSamplePhotoKey.init)
+      canvas = project.canvas.rawValue
+      outputMaxDimension = project.outputMaxDimension
+      spacing = project.spacing
+      photos = project.photos.map(LayoutSamplePhotoKey.init)
     }
   }
 
@@ -137,27 +137,27 @@ enum LayoutEngine {
     }
   }
 
-  static func outputSize(for task: CollageTask) -> CGSize {
-    let maxDimension = CGFloat(max(512, min(task.outputMaxDimension, 8192)))
+  static func outputSize(for project: Project) -> CGSize {
+    let maxDimension = CGFloat(max(512, min(project.outputMaxDimension, 8192)))
 
-    if let flowAxis = flowAxis(for: task) {
-      let spacing = scaledSpacing(task.spacing, outputWidth: maxDimension)
-      let gaps = CGFloat(max(0, task.photos.count - 1)) * spacing
+    if let flowAxis = flowAxis(for: project) {
+      let spacing = scaledSpacing(project.spacing, outputWidth: maxDimension)
+      let gaps = CGFloat(max(0, project.photos.count - 1)) * spacing
       switch flowAxis {
       case .horizontal:
-        let photoWidth = task.photos.reduce(CGFloat.zero) { partial, photo in
+        let photoWidth = project.photos.reduce(CGFloat.zero) { partial, photo in
           partial + maxDimension * max(photo.aspectRatio, 0.05)
         }
         return CGSize(width: max(1, photoWidth + gaps), height: maxDimension)
       case .vertical:
-        let photoHeight = task.photos.reduce(CGFloat.zero) { partial, photo in
+        let photoHeight = project.photos.reduce(CGFloat.zero) { partial, photo in
           partial + maxDimension / max(photo.aspectRatio, 0.05)
         }
         return CGSize(width: maxDimension, height: max(1, photoHeight + gaps))
       }
     }
 
-    if let snapshot = activeSavedLayoutSnapshot(for: task) {
+    if let snapshot = activeSavedLayoutSnapshot(for: project) {
       let ratio = CGFloat(snapshot.outputAspectRatio)
       if ratio >= 1 {
         return CGSize(width: maxDimension, height: (maxDimension / ratio).rounded())
@@ -165,31 +165,31 @@ enum LayoutEngine {
       return CGSize(width: (maxDimension * ratio).rounded(), height: maxDimension)
     }
 
-    let ratio = task.canvas.aspectRatio
+    let ratio = project.canvas.aspectRatio
     if ratio >= 1 {
       return CGSize(width: maxDimension, height: (maxDimension / ratio).rounded())
     }
     return CGSize(width: (maxDimension * ratio).rounded(), height: maxDimension)
   }
 
-  static func selectedTemplate(for task: CollageTask) -> CollageLayoutTemplate {
-    if let snapshot = activeSavedLayoutSnapshot(for: task),
-      LayoutCatalog.template(id: task.layoutID, photoCount: task.photos.count) == nil
+  static func selectedTemplate(for project: Project) -> CollageLayoutTemplate {
+    if let snapshot = activeSavedLayoutSnapshot(for: project),
+      LayoutCatalog.template(id: project.layoutID, photoCount: project.photos.count) == nil
     {
       return CollageLayoutTemplate(
-        id: snapshot.sourceLayoutID ?? "saved-layout-\(task.id.uuidString)",
+        id: snapshot.sourceLayoutID ?? "saved-layout-\(project.id.uuidString)",
         title: snapshot.sourceLayoutTitle,
         family: LayoutFamily(rawValue: snapshot.sourceLayoutFamily) ?? .grid,
         recipe: .custom,
         legacyLayout: nil
       )
     }
-    let template = LayoutCatalog.selectedTemplate(for: task)
+    let template = LayoutCatalog.selectedTemplate(for: project)
     guard template.family == .hero || template.family == .editorial,
-      let requestedMainCount = mainPhotoCount(for: task)
+      let requestedMainCount = mainPhotoCount(for: project)
     else { return template }
 
-    let mainCount = min(max(1, requestedMainCount), max(1, min(3, task.photos.count - 1)))
+    let mainCount = min(max(1, requestedMainCount), max(1, min(3, project.photos.count - 1)))
     let recipe: LayoutRecipe
     switch template.recipe {
     case .hero(let edge, let fraction):
@@ -197,20 +197,20 @@ enum LayoutEngine {
         edge: edge,
         mainCount: mainCount,
         fraction: max(
-          fraction, recommendedMainFraction(photoCount: task.photos.count, mainCount: mainCount))
+          fraction, recommendedMainFraction(photoCount: project.photos.count, mainCount: mainCount))
       )
     case .multiHero(let edge, _, let fraction):
       recipe = .multiHero(
         edge: edge,
         mainCount: mainCount,
         fraction: max(
-          fraction, recommendedMainFraction(photoCount: task.photos.count, mainCount: mainCount))
+          fraction, recommendedMainFraction(photoCount: project.photos.count, mainCount: mainCount))
       )
     case .bands(let axis, let counts, let weights):
       let adjusted = editorialBands(
         counts: counts,
         weights: weights,
-        photoCount: task.photos.count,
+        photoCount: project.photos.count,
         mainCount: mainCount
       )
       recipe = .bands(axis: axis, counts: adjusted.counts, weights: adjusted.weights)
@@ -231,27 +231,27 @@ enum LayoutEngine {
     )
   }
 
-  static func mainPhotoCount(for task: CollageTask) -> Int? {
-    let template = LayoutCatalog.selectedTemplate(for: task)
+  static func mainPhotoCount(for project: Project) -> Int? {
+    let template = LayoutCatalog.selectedTemplate(for: project)
     guard template.family == .hero || template.family == .editorial,
-      task.photos.count > 1
+      project.photos.count > 1
     else { return nil }
-    if let requested = task.mainPhotoCount {
-      return min(max(1, requested), min(3, task.photos.count - 1))
+    if let requested = project.mainPhotoCount {
+      return min(max(1, requested), min(3, project.photos.count - 1))
     }
-    if let legacyMainCount = legacyMainPhotoCount(from: task.layoutID) {
-      return min(max(1, legacyMainCount), min(3, task.photos.count - 1))
+    if let legacyMainCount = legacyMainPhotoCount(from: project.layoutID) {
+      return min(max(1, legacyMainCount), min(3, project.photos.count - 1))
     }
     switch template.recipe {
     case .hero:
       return 1
     case .multiHero(_, let mainCount, _):
-      return min(max(1, mainCount), min(3, task.photos.count - 1))
+      return min(max(1, mainCount), min(3, project.photos.count - 1))
     case .bands(_, let counts, let weights):
       guard !counts.isEmpty else { return 1 }
       return min(
         max(1, counts[editorialMainBandIndex(counts: counts, weights: weights)]),
-        min(3, task.photos.count - 1)
+        min(3, project.photos.count - 1)
       )
     default:
       return nil
@@ -295,18 +295,18 @@ enum LayoutEngine {
 
   static func fittingLayoutSamples(
     family: LayoutFamily,
-    task: CollageTask
+    project: Project
   ) -> [CollageLayoutTemplate] {
-    let key = LayoutSampleCacheKey(family: family, mainPhotoCount: nil, task: task)
+    let key = LayoutSampleCacheKey(family: family, mainPhotoCount: nil, project: project)
     if let cached = fittingSampleCache.value(for: key) { return cached }
     let result =
       if family == .smart {
-        smartLayoutSamples(for: task)
+        smartLayoutSamples(for: project)
       } else {
         fittingLayoutSamples(
           family: family,
-          task: task,
-          samples: layoutSamples(family: family, photoCount: max(1, task.photos.count)),
+          project: project,
+          samples: layoutSamples(family: family, photoCount: max(1, project.photos.count)),
           includesEveryDistinctSample: family.browserFamily == .hero
         )
       }
@@ -316,27 +316,27 @@ enum LayoutEngine {
 
   static func fittingLayoutSamples(
     family: LayoutFamily,
-    task: CollageTask,
+    project: Project,
     mainPhotoCount: Int
   ) -> [CollageLayoutTemplate] {
     let key = LayoutSampleCacheKey(
       family: family,
       mainPhotoCount: mainPhotoCount,
-      task: task
+      project: project
     )
     if let cached = fittingSampleCache.value(for: key) { return cached }
     let result: [CollageLayoutTemplate]
     if family == .smart {
-      result = smartLayoutSamples(for: task)
+      result = smartLayoutSamples(for: project)
     } else {
       let samples = layoutSamples(
         family: family,
-        photoCount: max(1, task.photos.count),
+        photoCount: max(1, project.photos.count),
         mainPhotoCount: mainPhotoCount
       )
       result = fittingLayoutSamples(
         family: family,
-        task: task,
+        project: project,
         samples: samples,
         includesEveryDistinctSample: false
       )
@@ -347,16 +347,16 @@ enum LayoutEngine {
 
   private static func fittingLayoutSamples(
     family: LayoutFamily,
-    task: CollageTask,
+    project: Project,
     samples: [CollageLayoutTemplate],
     includesEveryDistinctSample: Bool
   ) -> [CollageLayoutTemplate] {
-    guard task.photos.count > 1 else { return samples }
+    guard project.photos.count > 1 else { return samples }
 
     var distinctSamples: [String: (CollageLayoutTemplate, LayoutPhotoFit)] = [:]
     for template in samples {
-      let fit = photoFit(for: template, task: task)
-      let key = layoutGeometryKey(for: template, task: task)
+      let fit = photoFit(for: template, project: project)
+      let key = layoutGeometryKey(for: template, project: project)
       guard let existing = distinctSamples[key] else {
         distinctSamples[key] = (template, fit)
         continue
@@ -390,25 +390,25 @@ enum LayoutEngine {
   }
 
   static func smartLayoutSamples(
-    for task: CollageTask,
+    for project: Project,
     minimumCount: Int = smartLayoutMinimumSuggestionCount,
     maximumCount: Int = smartLayoutMaximumSuggestionCount
   ) -> [CollageLayoutTemplate] {
     let requiredCount = max(0, minimumCount)
     let suggestionLimit = max(requiredCount, maximumCount)
-    let samples = LayoutCatalog.templates(photoCount: max(1, task.photos.count)).filter {
+    let samples = LayoutCatalog.templates(photoCount: max(1, project.photos.count)).filter {
       $0.family != .flow
     }
-    guard task.photos.count > 1 else { return Array(samples.prefix(suggestionLimit)) }
+    guard project.photos.count > 1 else { return Array(samples.prefix(suggestionLimit)) }
 
     var distinctAssessments: [String: SmartLayoutAssessment] = [:]
     for template in samples {
       let assessment = SmartLayoutAssessment(
         template: template,
-        photoFit: photoFit(for: template, task: task),
-        subjectVisibility: subjectVisibility(for: template, task: task)
+        photoFit: photoFit(for: template, project: project),
+        subjectVisibility: subjectVisibility(for: template, project: project)
       )
-      let geometryKey = layoutGeometryKey(for: template, task: task)
+      let geometryKey = layoutGeometryKey(for: template, project: project)
       guard let existing = distinctAssessments[geometryKey] else {
         distinctAssessments[geometryKey] = assessment
         continue
@@ -457,18 +457,18 @@ enum LayoutEngine {
 
   private static func layoutGeometryKey(
     for template: CollageLayoutTemplate,
-    task: CollageTask
+    project: Project
   ) -> String {
-    var previewTask = task
-    previewTask.layoutID = template.id
-    previewTask.mainPhotoCount = defaultMainPhotoCount(for: template.recipe)
-    previewTask.isPhotoOrderManuallyAdjusted = true
-    previewTask.spacing = 0
-    previewTask.clearLayoutCustomization()
-    previewTask.clearCustomLayout()
-    previewTask.clearSavedLayoutSnapshot()
-    let size = outputSize(for: previewTask)
-    let frameKeys = layoutFrames(for: previewTask, in: size).map { frame in
+    var previewProject = project
+    previewProject.layoutID = template.id
+    previewProject.mainPhotoCount = defaultMainPhotoCount(for: template.recipe)
+    previewProject.isPhotoOrderManuallyAdjusted = true
+    previewProject.spacing = 0
+    previewProject.clearLayoutCustomization()
+    previewProject.clearCustomLayout()
+    previewProject.clearSavedLayoutSnapshot()
+    let size = outputSize(for: previewProject)
+    let frameKeys = layoutFrames(for: previewProject, in: size).map { frame in
       let rect = frame.rect
       let values = [
         rect.minX / max(size.width, 1),
@@ -487,19 +487,19 @@ enum LayoutEngine {
   }
 
   static func recommendedCanvasAndTemplate(
-    for task: CollageTask
+    for project: Project
   ) -> (canvas: CanvasPreset, template: CollageLayoutTemplate) {
-    let layouts = LayoutCatalog.templates(photoCount: max(1, task.photos.count)).filter {
+    let layouts = LayoutCatalog.templates(photoCount: max(1, project.photos.count)).filter {
       $0.family != .flow
     }
-    guard task.photos.count > 1 else { return (task.canvas, layouts[0]) }
+    guard project.photos.count > 1 else { return (project.canvas, layouts[0]) }
 
     var recommendations: [(CanvasPreset, CollageLayoutTemplate, LayoutPhotoFit)] = []
     for canvas in CanvasPreset.allCases {
-      var candidateTask = task
-      candidateTask.canvas = canvas
+      var candidateProject = project
+      candidateProject.canvas = canvas
       for template in layouts {
-        recommendations.append((canvas, template, photoFit(for: template, task: candidateTask)))
+        recommendations.append((canvas, template, photoFit(for: template, project: candidateProject)))
       }
     }
     let bestByCanvas = CanvasPreset.allCases.compactMap { canvas in
@@ -531,10 +531,10 @@ enum LayoutEngine {
       if left.0 != .square, right.0 == .square { return true }
       return left.1.id > right.1.id
     }
-    guard let recommendation else { return (task.canvas, layouts[0]) }
-    var recommendedTask = task
-    recommendedTask.canvas = recommendation.0
-    let firstSmartLayout = smartLayoutSamples(for: recommendedTask).first ?? recommendation.1
+    guard let recommendation else { return (project.canvas, layouts[0]) }
+    var recommendedProject = project
+    recommendedProject.canvas = recommendation.0
+    let firstSmartLayout = smartLayoutSamples(for: recommendedProject).first ?? recommendation.1
     return (recommendation.0, firstSmartLayout)
   }
 
@@ -542,13 +542,13 @@ enum LayoutEngine {
     abs(log(Double(canvas.aspectRatio)))
   }
 
-  static func recommendedTemplate(for task: CollageTask) -> CollageLayoutTemplate {
-    let layouts = LayoutCatalog.templates(photoCount: max(1, task.photos.count)).filter {
+  static func recommendedTemplate(for project: Project) -> CollageLayoutTemplate {
+    let layouts = LayoutCatalog.templates(photoCount: max(1, project.photos.count)).filter {
       $0.family != .flow
     }
-    guard task.photos.count > 1 else { return layouts[0] }
+    guard project.photos.count > 1 else { return layouts[0] }
     let assessed = layouts.map { template in
-      (template, photoFit(for: template, task: task))
+      (template, photoFit(for: template, project: project))
     }
     let qualified = assessed.filter { _, fit in
       fit.averageVisibleFraction >= 0.68 && fit.minimumVisibleFraction >= 0.42
@@ -565,24 +565,24 @@ enum LayoutEngine {
 
   static func photoFit(
     for template: CollageLayoutTemplate,
-    task: CollageTask
+    project: Project
   ) -> LayoutPhotoFit {
-    guard !task.photos.isEmpty else {
+    guard !project.photos.isEmpty else {
       return LayoutPhotoFit(averageVisibleFraction: 1, minimumVisibleFraction: 1)
     }
-    var candidateTask = task
-    candidateTask.layoutID = template.id
-    candidateTask.clearLayoutCustomization()
-    candidateTask.clearCustomLayout()
-    candidateTask.clearSavedLayoutSnapshot()
-    candidateTask.isPhotoOrderManuallyAdjusted = true
-    candidateTask.mainPhotoCount = defaultMainPhotoCount(for: template.recipe)
-    let frames = layoutFrames(for: candidateTask, in: outputSize(for: candidateTask))
-    guard frames.count == task.photos.count else {
+    var candidateProject = project
+    candidateProject.layoutID = template.id
+    candidateProject.clearLayoutCustomization()
+    candidateProject.clearCustomLayout()
+    candidateProject.clearSavedLayoutSnapshot()
+    candidateProject.isPhotoOrderManuallyAdjusted = true
+    candidateProject.mainPhotoCount = defaultMainPhotoCount(for: template.recipe)
+    let frames = layoutFrames(for: candidateProject, in: outputSize(for: candidateProject))
+    guard frames.count == project.photos.count else {
       return LayoutPhotoFit(averageVisibleFraction: 0, minimumVisibleFraction: 0)
     }
 
-    let photoRatios = task.photos.map { max(0.05, Double($0.aspectRatio)) }.sorted()
+    let photoRatios = project.photos.map { max(0.05, Double($0.aspectRatio)) }.sorted()
     let frameDescriptors = frames.map { frame in
       (
         ratio: max(0.05, Double(frame.rect.width / max(frame.rect.height, 1))),
@@ -600,21 +600,21 @@ enum LayoutEngine {
 
   private static func subjectVisibility(
     for template: CollageLayoutTemplate,
-    task: CollageTask
+    project: Project
   ) -> Double {
-    guard task.photos.contains(where: { $0.detectedFocusArea != nil }) else { return 1 }
-    var candidateTask = task
-    candidateTask.layoutID = template.id
-    candidateTask.mainPhotoCount = defaultMainPhotoCount(for: template.recipe)
-    candidateTask.isPhotoOrderManuallyAdjusted = false
-    candidateTask.clearLayoutCustomization()
-    candidateTask.clearCustomLayout()
-    candidateTask.clearSavedLayoutSnapshot()
-    let frames = layoutFrames(for: candidateTask, in: outputSize(for: candidateTask))
-    guard frames.count == task.photos.count else { return 0 }
+    guard project.photos.contains(where: { $0.detectedFocusArea != nil }) else { return 1 }
+    var candidateProject = project
+    candidateProject.layoutID = template.id
+    candidateProject.mainPhotoCount = defaultMainPhotoCount(for: template.recipe)
+    candidateProject.isPhotoOrderManuallyAdjusted = false
+    candidateProject.clearLayoutCustomization()
+    candidateProject.clearCustomLayout()
+    candidateProject.clearSavedLayoutSnapshot()
+    let frames = layoutFrames(for: candidateProject, in: outputSize(for: candidateProject))
+    guard frames.count == project.photos.count else { return 0 }
 
     var retainedSubjects: [Double] = []
-    for (photo, frame) in zip(task.photos, frames) {
+    for (photo, frame) in zip(project.photos, frames) {
       guard let detectedSubject = photo.detectedFocusArea?.rect.standardized,
         detectedSubject.width > 0,
         detectedSubject.height > 0
@@ -665,23 +665,23 @@ enum LayoutEngine {
     ).first { mainPhotoStructureKey(for: $0.recipe) == structureKey }
   }
 
-  static func flowAxis(for task: CollageTask) -> LayoutAxis? {
-    guard case .flow(let axis) = LayoutCatalog.selectedTemplate(for: task).recipe else {
+  static func flowAxis(for project: Project) -> LayoutAxis? {
+    guard case .flow(let axis) = LayoutCatalog.selectedTemplate(for: project).recipe else {
       return nil
     }
     return axis
   }
 
-  static func isFlowLayout(_ task: CollageTask) -> Bool {
-    flowAxis(for: task) != nil
+  static func isFlowLayout(_ project: Project) -> Bool {
+    flowAxis(for: project) != nil
   }
 
-  static func frames(for task: CollageTask, in size: CGSize) -> [CGRect] {
-    layoutFrames(for: task, in: size).map(\.rect)
+  static func frames(for project: Project, in size: CGSize) -> [CGRect] {
+    layoutFrames(for: project, in: size).map(\.rect)
   }
 
-  static func photoIndicesInVisualOrder(for task: CollageTask, in size: CGSize) -> [Int] {
-    let frames = layoutFrames(for: task, in: size)
+  static func photoIndicesInVisualOrder(for project: Project, in size: CGSize) -> [Int] {
+    let frames = layoutFrames(for: project, in: size)
     return frames.indices.sorted { left, right in
       let leftRect = frames[left].rect
       let rightRect = frames[right].rect
@@ -691,9 +691,9 @@ enum LayoutEngine {
     }
   }
 
-  static func layoutFrames(for task: CollageTask, in size: CGSize) -> [LayoutFrame] {
-    guard !task.photos.isEmpty else { return [] }
-    if let snapshot = activeSavedLayoutSnapshot(for: task) {
+  static func layoutFrames(for project: Project, in size: CGSize) -> [LayoutFrame] {
+    guard !project.photos.isEmpty else { return [] }
+    if let snapshot = activeSavedLayoutSnapshot(for: project) {
       return snapshot.frames.map { savedFrame in
         LayoutFrame(
           rect: savedFrame.rect.rect(in: size),
@@ -708,13 +708,13 @@ enum LayoutEngine {
       }
     }
     let spacing = scaledSpacing(
-      task.spacing,
-      outputWidth: flowAxis(for: task) == .horizontal ? size.height : size.width
+      project.spacing,
+      outputWidth: flowAxis(for: project) == .horizontal ? size.height : size.width
     )
-    let selectedTemplate = selectedTemplate(for: task)
+    let selectedTemplate = selectedTemplate(for: project)
     if case .custom = selectedTemplate.recipe,
-      let normalizedFrames = task.customLayoutFrames,
-      normalizedFrames.count == task.photos.count,
+      let normalizedFrames = project.customLayoutFrames,
+      normalizedFrames.count == project.photos.count,
       normalizedFrames.allSatisfy(\.isValid)
     {
       let structuralFrames = normalizedFrames.map { $0.rect(in: size) }
@@ -723,22 +723,22 @@ enum LayoutEngine {
         in: CGRect(origin: .zero, size: size),
         spacing: spacing
       ).map { LayoutFrame(rect: $0) }
-      if task.usesAutomaticPhotoArrangement, task.photos.count == frames.count {
-        return framesAssignedByPhoto(visualFrames: frames, photos: task.photos)
+      if project.usesAutomaticPhotoArrangement, project.photos.count == frames.count {
+        return framesAssignedByPhoto(visualFrames: frames, photos: project.photos)
       }
       return frames
     }
     var frames = layoutFrames(
       template: selectedTemplate,
-      photoCount: task.photos.count,
-      photoAspectRatios: task.photos.map(\.aspectRatio),
-      photos: task.photos,
+      photoCount: project.photos.count,
+      photoAspectRatios: project.photos.map(\.aspectRatio),
+      photos: project.photos,
       in: CGRect(origin: .zero, size: size),
       spacing: spacing,
-      layoutAdjustment: layoutAdjustmentGrid(for: task, in: size),
-      optimizesPhotoPlacement: task.usesAutomaticPhotoArrangement
+      layoutAdjustment: layoutAdjustmentGrid(for: project, in: size),
+      optimizesPhotoPlacement: project.usesAutomaticPhotoArrangement
     )
-    if let overrides = task.layoutFrameOverrides,
+    if let overrides = project.layoutFrameOverrides,
       overrides.count == frames.count,
       overrides.allSatisfy({ override in
         override.x.isFinite && override.y.isFinite && override.width.isFinite
@@ -747,7 +747,7 @@ enum LayoutEngine {
     {
       for index in frames.indices {
         frames[index].rect = overrides[index].rect(in: size)
-        if isFlowLayout(task) {
+        if isFlowLayout(project) {
           frames[index].usesAspectFit = false
         }
       }
@@ -755,20 +755,20 @@ enum LayoutEngine {
     return frames
   }
 
-  static func savedLayoutSnapshot(for task: CollageTask) -> SavedLayoutSnapshot? {
-    guard !task.photos.isEmpty else { return nil }
-    if case .custom = selectedTemplate(for: task).recipe, task.customLayoutFrames != nil {
+  static func savedLayoutSnapshot(for project: Project) -> SavedLayoutSnapshot? {
+    guard !project.photos.isEmpty else { return nil }
+    if case .custom = selectedTemplate(for: project).recipe, project.customLayoutFrames != nil {
       return nil
     }
-    let size = outputSize(for: task)
-    let frames = layoutFrames(for: task, in: size)
-    guard frames.count == task.photos.count, size.width > 0, size.height > 0 else { return nil }
-    let template = selectedTemplate(for: task)
+    let size = outputSize(for: project)
+    let frames = layoutFrames(for: project, in: size)
+    guard frames.count == project.photos.count, size.width > 0, size.height > 0 else { return nil }
+    let template = selectedTemplate(for: project)
     return SavedLayoutSnapshot(
-      sourceLayoutID: task.layoutID,
+      sourceLayoutID: project.layoutID,
       sourceLayoutTitle: template.title,
       sourceLayoutFamily: template.family.rawValue,
-      photoCount: task.photos.count,
+      photoCount: project.photos.count,
       outputAspectRatio: Double(size.width / size.height),
       frames: frames.map { frame in
         SavedLayoutFrame(
@@ -785,11 +785,11 @@ enum LayoutEngine {
     )
   }
 
-  static func activeSavedLayoutSnapshot(for task: CollageTask) -> SavedLayoutSnapshot? {
-    guard let snapshot = task.savedLayoutSnapshot,
-      snapshot.sourceLayoutID == task.layoutID,
-      snapshot.photoCount == task.photos.count,
-      snapshot.frames.count == task.photos.count,
+  static func activeSavedLayoutSnapshot(for project: Project) -> SavedLayoutSnapshot? {
+    guard let snapshot = project.savedLayoutSnapshot,
+      snapshot.sourceLayoutID == project.layoutID,
+      snapshot.photoCount == project.photos.count,
+      snapshot.frames.count == project.photos.count,
       snapshot.outputAspectRatio.isFinite,
       snapshot.outputAspectRatio > 0,
       snapshot.frames.allSatisfy({ $0.rect.isValid })
@@ -799,11 +799,11 @@ enum LayoutEngine {
 
   static func previewFrames(
     template: CollageLayoutTemplate,
-    task: CollageTask,
+    project: Project,
     in size: CGSize,
     preservesCurrentAdjustments: Bool
   ) -> [LayoutFrame] {
-    guard !task.photos.isEmpty else {
+    guard !project.photos.isEmpty else {
       return layoutFrames(
         template: template,
         photoCount: 1,
@@ -815,23 +815,23 @@ enum LayoutEngine {
         optimizesPhotoPlacement: false
       )
     }
-    var previewTask = task
-    previewTask.layoutID = template.id
-    previewTask.mainPhotoCount = mainPhotoCount(for: template)
+    var previewProject = project
+    previewProject.layoutID = template.id
+    previewProject.mainPhotoCount = mainPhotoCount(for: template)
     if !preservesCurrentAdjustments {
-      previewTask.clearLayoutCustomization()
+      previewProject.clearLayoutCustomization()
     }
-    return layoutFrames(for: previewTask, in: size)
+    return layoutFrames(for: previewProject, in: size)
   }
 
   static func layoutAdjustmentGrid(
-    for task: CollageTask,
+    for project: Project,
     in size: CGSize
   ) -> LayoutAdjustmentGrid? {
-    let count = task.photos.count
+    let count = project.photos.count
     guard count > 1 else { return nil }
-    let template = selectedTemplate(for: task)
-    let spacing = scaledSpacing(task.spacing, outputWidth: size.width)
+    let template = selectedTemplate(for: project)
+    let spacing = scaledSpacing(project.spacing, outputWidth: size.width)
     let rowCounts: [Int]
     let defaultRowWeights: [Double]
     let defaultColumnWeights: [[Double]]
@@ -846,7 +846,7 @@ enum LayoutEngine {
       rowCounts = resolvedRowCounts(requestedCounts, photoCount: count)
       let weights = adaptiveGridWeights(
         rowCounts: rowCounts,
-        photoAspectRatios: task.photos.map(\.aspectRatio),
+        photoAspectRatios: project.photos.map(\.aspectRatio),
         availableWidth: size.width,
         spacing: spacing
       )
@@ -888,11 +888,11 @@ enum LayoutEngine {
     }
 
     let resolvedRowWeights = validatedWeights(
-      task.layoutRowWeights,
+      project.layoutRowWeights,
       defaults: defaultRowWeights
     )
     let resolvedColumnWeights: [[Double]]
-    if let customWeights = task.layoutColumnWeights,
+    if let customWeights = project.layoutColumnWeights,
       customWeights.count == defaultColumnWeights.count,
       zip(customWeights, defaultColumnWeights).allSatisfy({ custom, defaults in
         custom.count == defaults.count && custom.allSatisfy { $0.isFinite && $0 > 0 }
@@ -909,27 +909,27 @@ enum LayoutEngine {
     )
   }
 
-  static func layoutDividers(for task: CollageTask, in size: CGSize) -> [LayoutDivider] {
-    guard task.photos.count > 1 else { return [] }
-    guard !isFlowLayout(task) else { return [] }
-    if activeSavedLayoutSnapshot(for: task) != nil {
-      return frameOverrideDividers(for: task, in: size)
+  static func layoutDividers(for project: Project, in size: CGSize) -> [LayoutDivider] {
+    guard project.photos.count > 1 else { return [] }
+    guard !isFlowLayout(project) else { return [] }
+    if activeSavedLayoutSnapshot(for: project) != nil {
+      return frameOverrideDividers(for: project, in: size)
     }
-    guard let adjustment = layoutAdjustmentGrid(for: task, in: size) else {
-      return frameOverrideDividers(for: task, in: size)
+    guard let adjustment = layoutAdjustmentGrid(for: project, in: size) else {
+      return frameOverrideDividers(for: project, in: size)
     }
     let rect = CGRect(origin: .zero, size: size)
     let frames = layoutFrames(
-      template: selectedTemplate(for: task),
-      photoCount: task.photos.count,
-      photoAspectRatios: task.photos.map(\.aspectRatio),
+      template: selectedTemplate(for: project),
+      photoCount: project.photos.count,
+      photoAspectRatios: project.photos.map(\.aspectRatio),
       photos: [],
       in: rect,
-      spacing: scaledSpacing(task.spacing, outputWidth: size.width),
+      spacing: scaledSpacing(project.spacing, outputWidth: size.width),
       layoutAdjustment: adjustment,
       optimizesPhotoPlacement: false
     )
-    guard frames.count == task.photos.count else { return [] }
+    guard frames.count == project.photos.count else { return [] }
 
     var rows: [[LayoutFrame]] = []
     var frameIndex = 0
@@ -979,7 +979,7 @@ enum LayoutEngine {
   }
 
   static func adjustedFrameOverrides(
-    for task: CollageTask,
+    for project: Project,
     moving divider: LayoutDivider,
     normalizedDelta: Double
   ) -> [NormalizedLayoutFrame]? {
@@ -987,12 +987,12 @@ enum LayoutEngine {
       case .frames(let leadingIndices, let trailingIndices) = divider.adjustment,
       !leadingIndices.isEmpty,
       !trailingIndices.isEmpty,
-      (leadingIndices + trailingIndices).allSatisfy({ task.photos.indices.contains($0) })
+      (leadingIndices + trailingIndices).allSatisfy({ project.photos.indices.contains($0) })
     else { return nil }
 
-    let size = outputSize(for: task)
-    var frames = layoutFrames(for: task, in: size).map(\.rect)
-    guard frames.count == task.photos.count else { return nil }
+    let size = outputSize(for: project)
+    var frames = layoutFrames(for: project, in: size).map(\.rect)
+    guard frames.count == project.photos.count else { return nil }
     let dimension = divider.axis == .horizontal ? size.height : size.width
     let requestedDelta = CGFloat(normalizedDelta) * dimension
     let minimumLength = max(1, dimension * 0.04)
@@ -1042,13 +1042,13 @@ enum LayoutEngine {
   }
 
   static func adjustedSavedLayoutFrames(
-    for task: CollageTask,
+    for project: Project,
     moving divider: LayoutDivider,
     normalizedDelta: Double
   ) -> [SavedLayoutFrame]? {
-    guard let snapshot = activeSavedLayoutSnapshot(for: task),
+    guard let snapshot = activeSavedLayoutSnapshot(for: project),
       let adjustedRects = adjustedFrameOverrides(
-        for: task,
+        for: project,
         moving: divider,
         normalizedDelta: normalizedDelta
       ),
@@ -1062,14 +1062,14 @@ enum LayoutEngine {
   }
 
   static func adjustedCustomLayoutFrames(
-    for task: CollageTask,
+    for project: Project,
     moving divider: LayoutDivider,
     normalizedDelta: Double
   ) -> [NormalizedLayoutFrame]? {
-    guard case .custom = selectedTemplate(for: task).recipe,
+    guard case .custom = selectedTemplate(for: project).recipe,
       case .frames(let leadingIndices, let trailingIndices) = divider.adjustment,
-      let customFrames = task.customLayoutFrames,
-      customFrames.count == task.photos.count,
+      let customFrames = project.customLayoutFrames,
+      customFrames.count == project.photos.count,
       !leadingIndices.isEmpty,
       !trailingIndices.isEmpty,
       (leadingIndices + trailingIndices).allSatisfy({ customFrames.indices.contains($0) })
@@ -1125,12 +1125,12 @@ enum LayoutEngine {
   }
 
   private static func frameOverrideDividers(
-    for task: CollageTask,
+    for project: Project,
     in size: CGSize
   ) -> [LayoutDivider] {
-    let frames = layoutFrames(for: task, in: size).map(\.rect)
+    let frames = layoutFrames(for: project, in: size).map(\.rect)
     guard frames.count > 1 else { return [] }
-    let spacing = scaledSpacing(task.spacing, outputWidth: size.width)
+    let spacing = scaledSpacing(project.spacing, outputWidth: size.width)
     let coordinateTolerance = max(1, min(size.width, size.height) * 0.0015)
     let gapTolerance = max(2, spacing * 0.3, coordinateTolerance)
     let minimumOverlap = max(2, min(size.width, size.height) * 0.005)
