@@ -98,7 +98,7 @@ struct SubscriptionView: View {
         .frame(maxWidth: .infinity)
       }
       .navigationTitle("Premium")
-      .navigationBarTitleDisplayMode(.inline)
+      .subscriptionNavigationTitleStyle()
       .toolbar {
         ToolbarItem(placement: .confirmationAction) {
           Button("Done", action: dismiss.callAsFunction)
@@ -117,6 +117,7 @@ struct SubscriptionView: View {
     } message: {
       Text(errorMessage ?? "Please try again.")
     }
+    .subscriptionSheetSize()
   }
 
   private var priceDescription: String {
@@ -199,12 +200,32 @@ private struct PrivacySummaryView: View {
         }
       }
       .navigationTitle("Privacy")
-      .navigationBarTitleDisplayMode(.inline)
+      .subscriptionNavigationTitleStyle()
       .toolbar {
         ToolbarItem(placement: .confirmationAction) {
           Button("Done", action: dismiss.callAsFunction)
         }
       }
     }
+  }
+}
+
+private extension View {
+  @ViewBuilder
+  func subscriptionNavigationTitleStyle() -> some View {
+    #if os(iOS)
+      navigationBarTitleDisplayMode(.inline)
+    #else
+      self
+    #endif
+  }
+
+  @ViewBuilder
+  func subscriptionSheetSize() -> some View {
+    #if os(macOS)
+      frame(minWidth: 520, minHeight: 620)
+    #else
+      self
+    #endif
   }
 }

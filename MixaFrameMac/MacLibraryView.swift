@@ -2,6 +2,7 @@ import SwiftUI
 
 private enum MacLibraryRoute: Hashable {
   case collection(UUID)
+  case newProject(Project)
   case project(collectionID: UUID, projectID: UUID)
 }
 
@@ -61,12 +62,14 @@ private struct MacNameRequest: Identifiable {
 
 struct MacLibraryView: View {
   @EnvironmentObject private var store: AppStore
+  @EnvironmentObject private var subscriptions: SubscriptionStore
   @State private var path: [MacLibraryRoute] = []
   @State private var nameRequest: MacNameRequest?
   @State private var collectionToDelete: Collection?
   @State private var projectToDelete: Project?
   @State private var collectionSort = MacLibrarySortDescriptor()
   @State private var projectSort = MacLibrarySortDescriptor()
+  @State private var showingSubscription = false
 
   private let gridSpacing: CGFloat = 22
   private let gridPadding: CGFloat = 28
@@ -85,6 +88,9 @@ struct MacLibraryView: View {
             } else {
               ContentUnavailableView("Collection Unavailable", systemImage: "rectangle.stack")
             }
+          case .newProject(let project):
+            MacProjectEditorView(collectionID: project.collectionID, project: project)
+              .id(project.id)
           case .project(let collectionID, let projectID):
             if let project = store.collection(id: collectionID)?.projects.first(where: {
               $0.id == projectID
@@ -113,6 +119,10 @@ struct MacLibraryView: View {
       ) { name in
         applyName(name, request: request)
       }
+    }
+    .sheet(isPresented: $showingSubscription) {
+      SubscriptionView()
+        .environmentObject(subscriptions)
     }
     .alert(
       "Delete \(collectionToDelete?.name ?? "collection")?",
@@ -222,6 +232,25 @@ struct MacLibraryView: View {
     }
     .background(Color(nsColor: .windowBackgroundColor))
     .navigationTitle("MixaFrame")
+    .toolbar {
+      ToolbarItem(placement: .primaryAction) {
+        Button {
+          showingSubscription = true
+        } label: {
+          Label(
+            subscriptions.hasPremiumAccess ? "Premium Active" : "Upgrade",
+            systemImage: subscriptions.hasPremiumAccess ? "crown.fill" : "crown"
+          )
+          .labelStyle(.iconOnly)
+        }
+        .tint(subscriptions.hasPremiumAccess ? .green : .orange)
+        .accessibilityHint(
+          subscriptions.hasPremiumAccess
+            ? "Shows subscription details"
+            : "Shows the free trial and annual subscription"
+        )
+      }
+    }
   }
 
   private func projectBrowser(_ collection: Collection) -> some View {
@@ -242,12 +271,8 @@ struct MacLibraryView: View {
             showsPlusBadge: true
           ) {
             var project = Project.new(collectionID: collection.id)
-            project.name = "Untitled Project"
-            Task {
-              if await store.saveProject(project) != nil {
-                path.append(.project(collectionID: collection.id, projectID: project.id))
-              }
-            }
+            MixaFrameExportPreferences.apply(to: &project)
+            path.append(.newProject(project))
           }
           ForEach(
             projectSort.sorted(
