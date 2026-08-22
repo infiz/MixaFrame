@@ -67,11 +67,12 @@ def project(
 
 def demo_library() -> list[dict[str, object]]:
     wildlife = [
-        photo("A0000000-0000-0000-0000-000000000001", "winged-bird.jpg", 1168, 673, 0.54, 0.47),
-        photo("A0000000-0000-0000-0000-000000000002", "walking-bird.jpg", 1792, 1470, 0.48, 0.53),
-        photo("A0000000-0000-0000-0000-000000000003", "perched-bird.jpg", 1792, 1470, 0.52, 0.50),
-        photo("A0000000-0000-0000-0000-000000000004", "ocelot.jpg", 2204, 2881, 0.58, 0.40),
+        photo("A0000000-0000-0000-0000-000000000001", "monkey-family.jpg", 851, 922, 0.43, 0.37),
+        photo("A0000000-0000-0000-0000-000000000002", "macaws-in-flight.jpg", 2776, 1902, 0.48, 0.64),
+        photo("A0000000-0000-0000-0000-000000000003", "ocelot.jpg", 2204, 2881, 0.58, 0.40),
+        photo("A0000000-0000-0000-0000-000000000004", "anhinga-wings.jpg", 875, 898, 0.43, 0.50),
         photo("A0000000-0000-0000-0000-000000000005", "jaguar-closeup.jpg", 802, 758, 0.48, 0.46),
+        photo("A0000000-0000-0000-0000-000000000006", "toucan.jpg", 924, 851, 0.50, 0.42),
     ]
     projects = [
         project(
@@ -85,14 +86,14 @@ def demo_library() -> list[dict[str, object]]:
             "B0000000-0000-0000-0000-000000000002",
             COLLECTION_ID,
             "Birds in Motion",
-            wildlife[:3],
+            [wildlife[1], wildlife[3], wildlife[5]],
             "featuredLeft",
         ),
         project(
             "B0000000-0000-0000-0000-000000000003",
             COLLECTION_ID,
             "Wildlife Portraits",
-            wildlife[3:],
+            [wildlife[0], wildlife[2], wildlife[4]],
             "columns",
         ),
     ]
@@ -152,11 +153,12 @@ def main() -> None:
     missing = sorted(
         name
         for name in (
+            "anhinga-wings.jpg",
             "jaguar-closeup.jpg",
+            "macaws-in-flight.jpg",
+            "monkey-family.jpg",
             "ocelot.jpg",
-            "perched-bird.jpg",
-            "walking-bird.jpg",
-            "winged-bird.jpg",
+            "toucan.jpg",
         )
         if not (PHOTO_DIRECTORY / name).exists()
     )
