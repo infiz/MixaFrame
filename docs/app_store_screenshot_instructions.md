@@ -5,7 +5,7 @@ The finished MixaFrame product-page screenshots are grouped by device family:
 - `AppStoreScreenshots/iPhone/Promotional` contains upload-ready 6.5-inch artwork.
 - `AppStoreScreenshots/iPad/Promotional` contains upload-ready 13-inch iPad artwork.
 
-Both sets use authentic MixaFrame UI captured from the simulator and the same five-photo
+Both sets use authentic MixaFrame UI captured from the simulator and the same six-photo
 Nature Stories demo library.
 
 ## Generate the promotional set
