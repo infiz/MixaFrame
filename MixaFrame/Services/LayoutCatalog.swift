@@ -222,13 +222,13 @@ enum LayoutCatalog {
     return layouts.first { $0.id == "n\(count)-\(replacementKey)" }
   }
 
-  static func selectedTemplate(for task: CollageTask) -> CollageLayoutTemplate {
-    let count = max(task.photos.count, 1)
-    if let selected = template(id: task.layoutID, photoCount: count) { return selected }
-    if let compatible = compatibleTemplate(id: task.layoutID, photoCount: count) {
+  static func selectedTemplate(for project: Project) -> CollageLayoutTemplate {
+    let count = max(project.photos.count, 1)
+    if let selected = template(id: project.layoutID, photoCount: count) { return selected }
+    if let compatible = compatibleTemplate(id: project.layoutID, photoCount: count) {
       return compatible
     }
-    return templates(photoCount: count).first(where: { $0.legacyLayout == task.layout })
+    return templates(photoCount: count).first(where: { $0.legacyLayout == project.layout })
       ?? templates(photoCount: count)[0]
   }
 

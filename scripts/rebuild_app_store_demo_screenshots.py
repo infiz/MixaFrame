@@ -335,7 +335,7 @@ def rebuild_featured_layout() -> None:
     canvas.save(path, "PNG", compress_level=9)
 
 
-def task_thumbnail(kind: str, size: tuple[int, int]) -> Image.Image:
+def project_thumbnail(kind: str, size: tuple[int, int]) -> Image.Image:
     thumbnail = Image.new("RGB", size, "black")
     gap = 3
     if kind == "wildlife":
@@ -477,7 +477,7 @@ def rebuild_saved_project() -> None:
             radius=24,
             fill="white",
         )
-        thumbnail = rounded(task_thumbnail(kind, thumbnail_size), 18)
+        thumbnail = rounded(project_thumbnail(kind, thumbnail_size), 18)
         canvas.paste(thumbnail, (68, top + 35), thumbnail)
         text_x = 340
         draw.text((text_x, top + 43), title, font=row_title_font, fill=(20, 20, 23))
@@ -492,7 +492,7 @@ def rebuild_saved_project() -> None:
         fill=(232, 230, 253),
     )
     hint_font = ImageFont.truetype(bold, 31)
-    hint = "Tap a saved collage to continue editing"
+    hint = "Tap a saved project to continue editing"
     bounds = draw.textbbox((0, 0), hint, font=hint_font)
     hint_width = bounds[2] - bounds[0]
     draw.text(

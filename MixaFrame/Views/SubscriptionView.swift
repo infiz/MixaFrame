@@ -23,14 +23,14 @@ struct SubscriptionView: View {
             Text(
               subscriptions.hasPremiumAccess
                 ? "Your annual subscription is active."
-                : "Keep every editing feature for free, or subscribe for clean collage exports."
+                : "Keep every editing feature for free, or subscribe for clean project exports."
             )
             .foregroundStyle(.secondary)
             .multilineTextAlignment(.center)
           }
 
           Label(
-            "No MixaFrame watermark on saved or shared collages", systemImage: "checkmark.seal.fill"
+            "No MixaFrame watermark on saved or shared projects", systemImage: "checkmark.seal.fill"
           )
           .font(.headline)
           .frame(maxWidth: .infinity, alignment: .leading)
@@ -187,9 +187,9 @@ private struct PrivacySummaryView: View {
   var body: some View {
     NavigationStack {
       List {
-        Section("Photos and Collages") {
+        Section("Photos and Projects") {
           Text(
-            "MixaFrame processes photos and stores projects on your device. It does not upload your photos to a MixaFrame server."
+            "MixaFrame processes photos and stores collections on your device. It does not upload your photos to a MixaFrame server."
           )
         }
         Section("Purchases") {

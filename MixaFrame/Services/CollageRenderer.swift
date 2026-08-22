@@ -24,8 +24,8 @@ enum CollageRenderer {
   static let previewMaximumPixelCount: CGFloat = 8_000_000
   static let previewMaximumSide: CGFloat = 12_000
 
-  static func exportOutputSize(for task: CollageTask) -> CGSize {
-    let requestedSize = LayoutEngine.outputSize(for: task)
+  static func exportOutputSize(for project: Project) -> CGSize {
+    let requestedSize = LayoutEngine.outputSize(for: project)
     let pixelCount = max(1, requestedSize.width * requestedSize.height)
     let pixelScale = sqrt(maximumPixelCount / pixelCount)
     let sideScale = maximumSide / max(requestedSize.width, requestedSize.height, 1)
@@ -38,12 +38,12 @@ enum CollageRenderer {
   }
 
   static func renderThumbnail(
-    task: CollageTask,
+    project: Project,
     images: [UIImage?],
     maximumPixelDimension: CGFloat = 512
   ) -> UIImage? {
-    guard !task.photos.isEmpty, images.count == task.photos.count else { return nil }
-    let outputSize = LayoutEngine.outputSize(for: task)
+    guard !project.photos.isEmpty, images.count == project.photos.count else { return nil }
+    let outputSize = LayoutEngine.outputSize(for: project)
     let scale = min(1, maximumPixelDimension / max(outputSize.width, outputSize.height, 1))
     let thumbnailSize = CGSize(
       width: max(1, (outputSize.width * scale).rounded()),
@@ -51,7 +51,7 @@ enum CollageRenderer {
     )
     let scaleX = thumbnailSize.width / max(outputSize.width, 1)
     let scaleY = thumbnailSize.height / max(outputSize.height, 1)
-    let layoutFrames = LayoutEngine.layoutFrames(for: task, in: outputSize)
+    let layoutFrames = LayoutEngine.layoutFrames(for: project, in: outputSize)
     let format = UIGraphicsImageRendererFormat()
     format.scale = 1
     format.opaque = false
@@ -60,7 +60,7 @@ enum CollageRenderer {
     return UIGraphicsImageRenderer(size: thumbnailSize, format: format).image { context in
       context.cgContext.scaleBy(x: scaleX, y: scaleY)
       draw(
-        task: task,
+        project: project,
         layoutFrames: layoutFrames,
         images: cgImages,
         canvasRect: CGRect(origin: .zero, size: outputSize),
@@ -71,21 +71,21 @@ enum CollageRenderer {
   }
 
   static func render(
-    task: CollageTask,
+    project: Project,
     photoDirectory: URL,
     includesWatermark: Bool = false
   ) throws -> UIImage {
-    guard task.photos.count >= 2 else { throw AppError.noPhotos }
-    let requestedOutputSize = LayoutEngine.outputSize(for: task)
-    let outputSize = exportOutputSize(for: task)
+    guard project.photos.count >= 2 else { throw AppError.noPhotos }
+    let requestedOutputSize = LayoutEngine.outputSize(for: project)
+    let outputSize = exportOutputSize(for: project)
 
     let format = UIGraphicsImageRendererFormat()
     format.scale = 1
-    format.opaque = !task.outputFormat.supportsTransparency
+    format.opaque = !project.outputFormat.supportsTransparency
     let renderer = UIGraphicsImageRenderer(size: outputSize, format: format)
     let scaleX = outputSize.width / max(requestedOutputSize.width, 1)
     let scaleY = outputSize.height / max(requestedOutputSize.height, 1)
-    let layoutFrames = LayoutEngine.layoutFrames(for: task, in: requestedOutputSize).map { frame in
+    let layoutFrames = LayoutEngine.layoutFrames(for: project, in: requestedOutputSize).map { frame in
       var scaledFrame = frame
       scaledFrame.rect = CGRect(
         x: frame.rect.minX * scaleX,
@@ -98,13 +98,13 @@ enum CollageRenderer {
     var renderingError: Error?
     let image = renderer.image { context in
       let canvasRect = CGRect(origin: .zero, size: outputSize)
-      prepareCanvas(task: task, canvasRect: canvasRect, context: context)
+      prepareCanvas(project: project, canvasRect: canvasRect, context: context)
 
-      for index in task.photos.indices {
+      for index in project.photos.indices {
         guard renderingError == nil, layoutFrames.indices.contains(index) else { break }
         autoreleasepool {
           do {
-            let photo = task.photos[index]
+            let photo = project.photos[index]
             let layoutFrame = layoutFrames[index]
             let url = photoDirectory.appendingPathComponent(photo.fileName)
             let cgImage = try exportSourceImage(
@@ -134,21 +134,21 @@ enum CollageRenderer {
   }
 
   private static func draw(
-    task: CollageTask,
+    project: Project,
     layoutFrames: [LayoutFrame],
     images: [CGImage?],
     canvasRect: CGRect,
     context: UIGraphicsImageRendererContext,
     includesWatermark: Bool
   ) {
-    prepareCanvas(task: task, canvasRect: canvasRect, context: context)
+    prepareCanvas(project: project, canvasRect: canvasRect, context: context)
 
-    for index in task.photos.indices {
+    for index in project.photos.indices {
       guard layoutFrames.indices.contains(index), images.indices.contains(index),
         let cgImage = images[index]
       else { continue }
       drawPhoto(
-        photo: task.photos[index],
+        photo: project.photos[index],
         layoutFrame: layoutFrames[index],
         cgImage: cgImage,
         context: context
@@ -162,20 +162,20 @@ enum CollageRenderer {
   }
 
   private static func prepareCanvas(
-    task: CollageTask,
+    project: Project,
     canvasRect: CGRect,
     context: UIGraphicsImageRendererContext
   ) {
-    if !task.outputFormat.supportsTransparency {
-      UIColor(hex: task.backgroundHex).setFill()
+    if !project.outputFormat.supportsTransparency {
+      UIColor(hex: project.backgroundHex).setFill()
       context.fill(canvasRect)
     } else {
       context.cgContext.clear(canvasRect)
     }
 
     context.cgContext.saveGState()
-    canvasClippingPath(for: task, in: canvasRect).addClip()
-    UIColor(hex: task.backgroundHex).setFill()
+    canvasClippingPath(for: project, in: canvasRect).addClip()
+    UIColor(hex: project.backgroundHex).setFill()
     context.fill(canvasRect)
   }
 
@@ -257,36 +257,36 @@ enum CollageRenderer {
   }
 
   static func export(
-    task: CollageTask,
+    project: Project,
     photoDirectory: URL,
-    projectName: String = "Project",
+    collectionName: String = "Collection",
     date: Date = Date(),
     includesWatermark: Bool = false
   ) throws -> URL {
     let image = try render(
-      task: task,
+      project: project,
       photoDirectory: photoDirectory,
       includesWatermark: includesWatermark
     )
-    return try writeExport(image: image, task: task, projectName: projectName, date: date)
+    return try writeExport(image: image, project: project, collectionName: collectionName, date: date)
   }
 
   static func prepareExport(
-    task: CollageTask,
+    project: Project,
     photoDirectory: URL,
-    projectName: String = "Project",
+    collectionName: String = "Collection",
     date: Date = Date(),
     includesWatermark: Bool = false
   ) throws
     -> PreparedCollageExport
   {
-    let requestedOutputSize = LayoutEngine.outputSize(for: task)
+    let requestedOutputSize = LayoutEngine.outputSize(for: project)
     let image = try render(
-      task: task,
+      project: project,
       photoDirectory: photoDirectory,
       includesWatermark: includesWatermark
     )
-    let url = try writeExport(image: image, task: task, projectName: projectName, date: date)
+    let url = try writeExport(image: image, project: project, collectionName: collectionName, date: date)
     return PreparedCollageExport(
       fileURL: url,
       previewImage: exportPreviewImage(from: image),
@@ -298,18 +298,18 @@ enum CollageRenderer {
 
   private static func writeExport(
     image: UIImage,
-    task: CollageTask,
-    projectName: String,
+    project: Project,
+    collectionName: String,
     date: Date
   ) throws -> URL {
     let fileName = exportFileName(
-      projectName: projectName,
-      collageName: task.name,
-      format: task.outputFormat,
+      collectionName: collectionName,
+      projectName: project.name,
+      format: project.outputFormat,
       date: date
     )
     let url = FileManager.default.temporaryDirectory.appendingPathComponent(fileName)
-    try writeEncodedImage(image, to: url, format: task.outputFormat, quality: task.quality)
+    try writeEncodedImage(image, to: url, format: project.outputFormat, quality: project.quality)
     return url
   }
 
@@ -340,7 +340,7 @@ enum CollageRenderer {
         domain: "MixaFrame.PhotoLibrary",
         code: 1,
         userInfo: [
-          NSLocalizedDescriptionKey: "Photo Library access is required to save the collage."
+          NSLocalizedDescriptionKey: "Photo Library access is required to save the project."
         ]
       )
     }
@@ -354,7 +354,7 @@ enum CollageRenderer {
       assetIdentifier = request.placeholderForCreatedAsset?.localIdentifier
     }
     guard let assetIdentifier else {
-      throw photoLibraryError("Photos did not return an identifier for the saved collage.")
+      throw photoLibraryError("Photos did not return an identifier for the saved project.")
     }
     return assetIdentifier
   }
@@ -367,7 +367,7 @@ enum CollageRenderer {
     let status = await PHPhotoLibrary.requestAuthorization(for: .readWrite)
     guard status == .authorized || status == .limited else {
       throw photoLibraryError(
-        "Full Photo Library access is required to replace an existing collage."
+        "Full Photo Library access is required to replace an existing project."
       )
     }
 
@@ -386,7 +386,7 @@ enum CollageRenderer {
     try? FileManager.default.removeItem(at: renderedURL)
     try FileManager.default.copyItem(at: fileURL, to: renderedURL)
     output.adjustmentData = PHAdjustmentData(
-      formatIdentifier: "com.infiz.MixaFrame.collage",
+      formatIdentifier: "com.infiz.MixaFrame.project",
       formatVersion: "1.0",
       data: Data(UUID().uuidString.utf8)
     )
@@ -410,7 +410,7 @@ enum CollageRenderer {
         } else {
           continuation.resume(
             throwing: photoLibraryError(
-              "Photos could not prepare the existing collage for editing."
+              "Photos could not prepare the existing project for editing."
             )
           )
         }
@@ -622,14 +622,14 @@ enum CollageRenderer {
     return UIBezierPath(roundedRect: frame, cornerRadius: radius)
   }
 
-  private static func canvasClippingPath(for task: CollageTask, in rect: CGRect) -> UIBezierPath {
-    let radius = min(rect.width, rect.height) * CGFloat(task.canvasCornerRadius / 100)
+  private static func canvasClippingPath(for project: Project, in rect: CGRect) -> UIBezierPath {
+    let radius = min(rect.width, rect.height) * CGFloat(project.canvasCornerRadius / 100)
     return UIBezierPath(roundedRect: rect, cornerRadius: radius)
   }
 
   static func exportFileName(
+    collectionName: String,
     projectName: String,
-    collageName: String,
     format: OutputFormat,
     date: Date = Date(),
     timeZone: TimeZone = .current
@@ -642,8 +642,8 @@ enum CollageRenderer {
     let timestamp = formatter.string(from: date)
     return [
       timestamp,
+      sanitizedFileNameComponent(collectionName, fallback: "Collection"),
       sanitizedFileNameComponent(projectName, fallback: "Project"),
-      sanitizedFileNameComponent(collageName, fallback: "Collage"),
     ].joined(separator: "-") + "." + format.fileExtension
   }
 

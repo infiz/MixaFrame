@@ -8,15 +8,15 @@
 
 /* Begin PBXBuildFile section */
 		A10000000000000000000001 /* MixaFrameApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000001 /* MixaFrameApp.swift */; };
-		A10000000000000000000002 /* CollageModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000002 /* CollageModels.swift */; };
+		A10000000000000000000002 /* ProjectModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000002 /* ProjectModels.swift */; };
 		A10000000000000000000003 /* LayoutEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000003 /* LayoutEngine.swift */; };
 		A10000000000000000000004 /* AppStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000004 /* AppStore.swift */; };
 		A10000000000000000000005 /* SubjectDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000005 /* SubjectDetector.swift */; };
 		A10000000000000000000006 /* CollageRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000006 /* CollageRenderer.swift */; };
-		A10000000000000000000007 /* ProjectListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000007 /* ProjectListView.swift */; };
-		A10000000000000000000008 /* ProjectDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000008 /* ProjectDetailView.swift */; };
-		A10000000000000000000009 /* CollageEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000009 /* CollageEditorView.swift */; };
-		A1000000000000000000000A /* CollagePreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000A /* CollagePreview.swift */; };
+		A10000000000000000000007 /* CollectionListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000007 /* CollectionListView.swift */; };
+		A10000000000000000000008 /* CollectionDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000008 /* CollectionDetailView.swift */; };
+		A10000000000000000000009 /* ProjectEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000009 /* ProjectEditorView.swift */; };
+		A1000000000000000000000A /* ProjectPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000A /* ProjectPreview.swift */; };
 		A1000000000000000000000B /* ShareSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000B /* ShareSheet.swift */; };
 		A1000000000000000000000C /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000C /* Assets.xcassets */; };
 		A1000000000000000000000D /* LayoutEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000D /* LayoutEngineTests.swift */; };
@@ -26,6 +26,23 @@
 		A10000000000000000000011 /* ExportPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000012 /* ExportPreviewView.swift */; };
 		A10000000000000000000012 /* SubscriptionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000013 /* SubscriptionStore.swift */; };
 		A10000000000000000000013 /* SubscriptionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000014 /* SubscriptionView.swift */; };
+		A10000000000000000000014 /* StoragePaths.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000016 /* StoragePaths.swift */; };
+		A10000000000000000000015 /* LibraryPersistence.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000017 /* LibraryPersistence.swift */; };
+		D10000000000000000000001 /* MixaFrameMacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = D20000000000000000000001 /* MixaFrameMacApp.swift */; };
+		D10000000000000000000002 /* AppStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000004 /* AppStore.swift */; };
+		D10000000000000000000003 /* MacCollageRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = D20000000000000000000003 /* MacCollageRenderer.swift */; };
+		D10000000000000000000004 /* MacLibraryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D20000000000000000000004 /* MacLibraryView.swift */; };
+		D10000000000000000000005 /* MacProjectEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D20000000000000000000005 /* MacProjectEditorView.swift */; };
+		D10000000000000000000006 /* ProjectModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000002 /* ProjectModels.swift */; };
+		D10000000000000000000007 /* LayoutCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000010 /* LayoutCatalog.swift */; };
+		D10000000000000000000008 /* LayoutEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000003 /* LayoutEngine.swift */; };
+		D10000000000000000000009 /* SubjectDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000005 /* SubjectDetector.swift */; };
+		D1000000000000000000000A /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000000C /* Assets.xcassets */; };
+		D1000000000000000000000B /* SDWebImageWebPCoder in Frameworks */ = {isa = PBXBuildFile; productRef = C10000000000000000000002 /* SDWebImageWebPCoder */; };
+		D1000000000000000000000C /* PhotoImagePipeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000011 /* PhotoImagePipeline.swift */; };
+		D1000000000000000000000D /* MacMediaImportService.swift in Sources */ = {isa = PBXBuildFile; fileRef = D20000000000000000000008 /* MacMediaImportService.swift */; };
+		D1000000000000000000000E /* StoragePaths.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000016 /* StoragePaths.swift */; };
+		D1000000000000000000000F /* LibraryPersistence.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000017 /* LibraryPersistence.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -40,15 +57,15 @@
 
 /* Begin PBXFileReference section */
 		A20000000000000000000001 /* MixaFrameApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MixaFrameApp.swift; sourceTree = "<group>"; };
-		A20000000000000000000002 /* CollageModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CollageModels.swift; sourceTree = "<group>"; };
+		A20000000000000000000002 /* ProjectModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectModels.swift; sourceTree = "<group>"; };
 		A20000000000000000000003 /* LayoutEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LayoutEngine.swift; sourceTree = "<group>"; };
 		A20000000000000000000004 /* AppStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStore.swift; sourceTree = "<group>"; };
 		A20000000000000000000005 /* SubjectDetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SubjectDetector.swift; sourceTree = "<group>"; };
 		A20000000000000000000006 /* CollageRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CollageRenderer.swift; sourceTree = "<group>"; };
-		A20000000000000000000007 /* ProjectListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectListView.swift; sourceTree = "<group>"; };
-		A20000000000000000000008 /* ProjectDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectDetailView.swift; sourceTree = "<group>"; };
-		A20000000000000000000009 /* CollageEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CollageEditorView.swift; sourceTree = "<group>"; };
-		A2000000000000000000000A /* CollagePreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CollagePreview.swift; sourceTree = "<group>"; };
+		A20000000000000000000007 /* CollectionListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CollectionListView.swift; sourceTree = "<group>"; };
+		A20000000000000000000008 /* CollectionDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CollectionDetailView.swift; sourceTree = "<group>"; };
+		A20000000000000000000009 /* ProjectEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectEditorView.swift; sourceTree = "<group>"; };
+		A2000000000000000000000A /* ProjectPreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectPreview.swift; sourceTree = "<group>"; };
 		A2000000000000000000000B /* ShareSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareSheet.swift; sourceTree = "<group>"; };
 		A2000000000000000000000C /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A2000000000000000000000D /* LayoutEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LayoutEngineTests.swift; sourceTree = "<group>"; };
@@ -60,7 +77,16 @@
 		A20000000000000000000013 /* SubscriptionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SubscriptionStore.swift; sourceTree = "<group>"; };
 		A20000000000000000000014 /* SubscriptionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SubscriptionView.swift; sourceTree = "<group>"; };
 		A20000000000000000000015 /* MixaFrame.storekit */ = {isa = PBXFileReference; lastKnownFileType = text; path = MixaFrame.storekit; sourceTree = "<group>"; };
+		A20000000000000000000016 /* StoragePaths.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoragePaths.swift; sourceTree = "<group>"; };
+		A20000000000000000000017 /* LibraryPersistence.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryPersistence.swift; sourceTree = "<group>"; };
 		B4A18321303199B900BE7881 /* MixaFrame.storekit */ = {isa = PBXFileReference; lastKnownFileType = text; path = MixaFrame.storekit; sourceTree = "<group>"; };
+		D20000000000000000000001 /* MixaFrameMacApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MixaFrameMacApp.swift; sourceTree = "<group>"; };
+		D20000000000000000000003 /* MacCollageRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacCollageRenderer.swift; sourceTree = "<group>"; };
+		D20000000000000000000004 /* MacLibraryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacLibraryView.swift; sourceTree = "<group>"; };
+		D20000000000000000000005 /* MacProjectEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacProjectEditorView.swift; sourceTree = "<group>"; };
+		D20000000000000000000006 /* MixaFrameMac.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = MixaFrameMac.entitlements; sourceTree = "<group>"; };
+		D20000000000000000000007 /* MixaFrame.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MixaFrame.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		D20000000000000000000008 /* MacMediaImportService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacMediaImportService.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -79,6 +105,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		D40000000000000000000001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				D1000000000000000000000B /* SDWebImageWebPCoder in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -87,6 +121,7 @@
 			children = (
 				B4A18321303199B900BE7881 /* MixaFrame.storekit */,
 				A50000000000000000000002 /* MixaFrame */,
+				D50000000000000000000001 /* MixaFrameMac */,
 				A50000000000000000000007 /* MixaFrameTests */,
 				A20000000000000000000015 /* MixaFrame.storekit */,
 				A50000000000000000000008 /* Products */,
@@ -116,7 +151,8 @@
 		A50000000000000000000004 /* Models */ = {
 			isa = PBXGroup;
 			children = (
-				A20000000000000000000002 /* CollageModels.swift */,
+				A20000000000000000000002 /* ProjectModels.swift */,
+				A20000000000000000000016 /* StoragePaths.swift */,
 			);
 			path = Models;
 			sourceTree = "<group>";
@@ -128,6 +164,7 @@
 				A20000000000000000000003 /* LayoutEngine.swift */,
 				A20000000000000000000011 /* PhotoImagePipeline.swift */,
 				A20000000000000000000004 /* AppStore.swift */,
+				A20000000000000000000017 /* LibraryPersistence.swift */,
 				A20000000000000000000013 /* SubscriptionStore.swift */,
 				A20000000000000000000005 /* SubjectDetector.swift */,
 				A20000000000000000000006 /* CollageRenderer.swift */,
@@ -138,10 +175,10 @@
 		A50000000000000000000006 /* Views */ = {
 			isa = PBXGroup;
 			children = (
-				A20000000000000000000007 /* ProjectListView.swift */,
-				A20000000000000000000008 /* ProjectDetailView.swift */,
-				A20000000000000000000009 /* CollageEditorView.swift */,
-				A2000000000000000000000A /* CollagePreview.swift */,
+				A20000000000000000000007 /* CollectionListView.swift */,
+				A20000000000000000000008 /* CollectionDetailView.swift */,
+				A20000000000000000000009 /* ProjectEditorView.swift */,
+				A2000000000000000000000A /* ProjectPreview.swift */,
 				A20000000000000000000012 /* ExportPreviewView.swift */,
 				A20000000000000000000014 /* SubscriptionView.swift */,
 				A2000000000000000000000B /* ShareSheet.swift */,
@@ -162,8 +199,22 @@
 			children = (
 				A2000000000000000000000E /* MixaFrame.app */,
 				A2000000000000000000000F /* MixaFrameTests.xctest */,
+				D20000000000000000000007 /* MixaFrame.app */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		D50000000000000000000001 /* MixaFrameMac */ = {
+			isa = PBXGroup;
+			children = (
+				D20000000000000000000001 /* MixaFrameMacApp.swift */,
+				D20000000000000000000008 /* MacMediaImportService.swift */,
+				D20000000000000000000003 /* MacCollageRenderer.swift */,
+				D20000000000000000000004 /* MacLibraryView.swift */,
+				D20000000000000000000005 /* MacProjectEditorView.swift */,
+				D20000000000000000000006 /* MixaFrameMac.entitlements */,
+			);
+			path = MixaFrameMac;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -207,6 +258,26 @@
 			productReference = A2000000000000000000000F /* MixaFrameTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
+		D70000000000000000000001 /* MixaFrameMac */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = D80000000000000000000001 /* Build configuration list for PBXNativeTarget "MixaFrameMac" */;
+			buildPhases = (
+				D60000000000000000000001 /* Sources */,
+				D40000000000000000000001 /* Frameworks */,
+				D60000000000000000000002 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = MixaFrameMac;
+			packageProductDependencies = (
+				C10000000000000000000002 /* SDWebImageWebPCoder */,
+			);
+			productName = MixaFrame;
+			productReference = D20000000000000000000007 /* MixaFrame.app */;
+			productType = "com.apple.product-type.application";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -223,6 +294,9 @@
 					A70000000000000000000002 = {
 						CreatedOnToolsVersion = 26.6;
 						TestTargetID = A70000000000000000000001;
+					};
+					D70000000000000000000001 = {
+						CreatedOnToolsVersion = 26.6;
 					};
 				};
 			};
@@ -243,6 +317,7 @@
 			projectRoot = "";
 			targets = (
 				A70000000000000000000001 /* MixaFrame */,
+				D70000000000000000000001 /* MixaFrameMac */,
 				A70000000000000000000002 /* MixaFrameTests */,
 			);
 		};
@@ -264,6 +339,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		D60000000000000000000002 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				D1000000000000000000000A /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -274,18 +357,20 @@
 				A1000000000000000000000F /* LayoutCatalog.swift in Sources */,
 				A10000000000000000000010 /* PhotoImagePipeline.swift in Sources */,
 				A10000000000000000000001 /* MixaFrameApp.swift in Sources */,
-				A10000000000000000000002 /* CollageModels.swift in Sources */,
+				A10000000000000000000002 /* ProjectModels.swift in Sources */,
 				A10000000000000000000003 /* LayoutEngine.swift in Sources */,
 				A10000000000000000000004 /* AppStore.swift in Sources */,
 				A10000000000000000000005 /* SubjectDetector.swift in Sources */,
 				A10000000000000000000006 /* CollageRenderer.swift in Sources */,
-				A10000000000000000000007 /* ProjectListView.swift in Sources */,
-				A10000000000000000000008 /* ProjectDetailView.swift in Sources */,
-				A10000000000000000000009 /* CollageEditorView.swift in Sources */,
-				A1000000000000000000000A /* CollagePreview.swift in Sources */,
+				A10000000000000000000007 /* CollectionListView.swift in Sources */,
+				A10000000000000000000008 /* CollectionDetailView.swift in Sources */,
+				A10000000000000000000009 /* ProjectEditorView.swift in Sources */,
+				A1000000000000000000000A /* ProjectPreview.swift in Sources */,
 				A10000000000000000000011 /* ExportPreviewView.swift in Sources */,
 				A10000000000000000000012 /* SubscriptionStore.swift in Sources */,
 				A10000000000000000000013 /* SubscriptionView.swift in Sources */,
+				A10000000000000000000014 /* StoragePaths.swift in Sources */,
+				A10000000000000000000015 /* LibraryPersistence.swift in Sources */,
 				A1000000000000000000000B /* ShareSheet.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -295,6 +380,26 @@
 			buildActionMask = 2147483647;
 			files = (
 				A1000000000000000000000D /* LayoutEngineTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		D60000000000000000000001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				D10000000000000000000001 /* MixaFrameMacApp.swift in Sources */,
+				D10000000000000000000002 /* AppStore.swift in Sources */,
+				D1000000000000000000000C /* PhotoImagePipeline.swift in Sources */,
+				D1000000000000000000000D /* MacMediaImportService.swift in Sources */,
+				D1000000000000000000000E /* StoragePaths.swift in Sources */,
+				D1000000000000000000000F /* LibraryPersistence.swift in Sources */,
+				D10000000000000000000003 /* MacCollageRenderer.swift in Sources */,
+				D10000000000000000000004 /* MacLibraryView.swift in Sources */,
+				D10000000000000000000005 /* MacProjectEditorView.swift in Sources */,
+				D10000000000000000000006 /* ProjectModels.swift in Sources */,
+				D10000000000000000000007 /* LayoutCatalog.swift in Sources */,
+				D10000000000000000000008 /* LayoutEngine.swift in Sources */,
+				D10000000000000000000009 /* SubjectDetector.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -356,7 +461,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 11;
+				CURRENT_PROJECT_VERSION = 12;
 				DEVELOPMENT_ASSET_PATHS = "";
 				DEVELOPMENT_TEAM = N6386GYZVJ;
 				ENABLE_PREVIEWS = YES;
@@ -364,20 +469,23 @@
 				INFOPLIST_KEY_CFBundleDisplayName = MixaFrame;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.photography";
-				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "MixaFrame saves your finished collages to your photo library.";
-				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "MixaFrame lets you select photos for your collages.";
+				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "MixaFrame saves your finished projects to your photo library.";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "MixaFrame lets you select photos for your projects.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				IPHONEOS_DEPLOYMENT_TARGET = 17.6;
 				MARKETING_VERSION = 1.0.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.infiz.MixaFrame;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = YES;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = 1;
+				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Debug;
 		};
@@ -387,27 +495,30 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 11;
+				CURRENT_PROJECT_VERSION = 12;
 				DEVELOPMENT_TEAM = N6386GYZVJ;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = MixaFrame;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.photography";
-				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "MixaFrame saves your finished collages to your photo library.";
-				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "MixaFrame lets you select photos for your collages.";
+				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "MixaFrame saves your finished projects to your photo library.";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "MixaFrame lets you select photos for your projects.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				IPHONEOS_DEPLOYMENT_TARGET = 17.6;
 				MARKETING_VERSION = 1.0.1;
 				PRODUCT_BUNDLE_IDENTIFIER = com.infiz.MixaFrame;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = YES;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = 1;
+				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Release;
 		};
@@ -422,7 +533,7 @@
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = 1;
+				TARGETED_DEVICE_FAMILY = "1,2";
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/MixaFrame.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/MixaFrame";
 			};
 			name = Debug;
@@ -438,8 +549,68 @@
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = 1;
+				TARGETED_DEVICE_FAMILY = "1,2";
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/MixaFrame.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/MixaFrame";
+			};
+			name = Release;
+		};
+		D81000000000000000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = MixaFrameMac/MixaFrameMac.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 12;
+				DEVELOPMENT_TEAM = N6386GYZVJ;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = MixaFrame;
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.photography";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 1.0.1;
+				PRODUCT_BUNDLE_IDENTIFIER = com.infiz.MixaFrame.macOS;
+				PRODUCT_NAME = MixaFrame;
+				SDKROOT = macosx;
+				SUPPORTED_PLATFORMS = macosx;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		D81000000000000000000002 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = MixaFrameMac/MixaFrameMac.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 12;
+				DEVELOPMENT_TEAM = N6386GYZVJ;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = MixaFrame;
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.photography";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 1.0.1;
+				PRODUCT_BUNDLE_IDENTIFIER = com.infiz.MixaFrame.macOS;
+				PRODUCT_NAME = MixaFrame;
+				SDKROOT = macosx;
+				SUPPORTED_PLATFORMS = macosx;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
 			};
 			name = Release;
 		};
@@ -469,6 +640,15 @@
 			buildConfigurations = (
 				B10000000000000000000005 /* Debug */,
 				B10000000000000000000006 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		D80000000000000000000001 /* Build configuration list for PBXNativeTarget "MixaFrameMac" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				D81000000000000000000001 /* Debug */,
+				D81000000000000000000002 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

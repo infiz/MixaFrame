@@ -2,52 +2,52 @@
 
 ## 1. Product Overview
 
-MixaFrame is an iOS photo collage app that lets users combine multiple photos into a single collage image. The app should automatically choose an appropriate output size and layout, let the user change those choices, preserve the important subjects in each source photo when cropping, and save every collage as an editable task inside a project.
+MixaFrame is an iOS photo collage app that lets users combine multiple photos into a single collage image. The app should automatically choose an appropriate output size and layout, let the user change those choices, preserve the important subjects in each source photo when cropping, and save every collage as an editable project inside a collection.
 
 ## 2. Product Goals
 
 - Make creating a polished photo collage quick and simple.
 - Reduce manual cropping by keeping the main subject or subjects visible in every frame.
 - Allow users to return to, update, and recreate previous collages.
-- Help users organize related collages into projects.
+- Help users organize related collages into collections.
 - Keep collage creation available without payment while offering watermark-free exports through an optional subscription.
 
 ## 3. Core Concepts
 
+### Collection
+
+A collection is the top-level organizational container. It has a name and contains zero or more projects.
+
 ### Project
 
-A project is the top-level organizational container. It has a name and contains zero or more collage tasks.
-
-### Collage Task
-
-A collage task stores everything needed to recreate or edit a collage, including its selected photos, their ordering, layout and crop information, output settings, and generated result.
+A project stores everything needed to recreate or edit a collage, including its selected photos, their ordering, layout and crop information, output settings, and generated result.
 
 ### Collage Output
 
-The collage output is a single image generated from a collage task. Updating a task may produce a new output image without losing the task itself.
+The collage output is a single image generated from a project. Updating a project may produce a new output image without losing the project itself.
 
 ## 4. Functional Requirements
 
-### 4.1 Project Management
+### 4.1 Collection Management
 
-- The user can create a project.
-- The user can give a project a name.
-- The user can view a list of projects.
-- The user can open a project and view its collage tasks.
-- A project can contain multiple collage tasks.
-- The user can rename a project.
-- The user can delete a project after confirming the action.
-- Deleting a project deletes all collage tasks contained in it.
+- The user can create a collection.
+- The user can give a collection a name.
+- The user can view a list of collections.
+- The user can open a collection and view its projects.
+- A collection can contain multiple projects.
+- The user can rename a collection.
+- The user can delete a collection after confirming the action.
+- Deleting a collection deletes all projects contained in it.
 
 ### 4.2 Photo Selection
 
-- The user can create a collage task inside a project.
-- The user can select multiple photos from the iOS photo library for a collage task.
+- The user can create a project inside a collection.
+- The user can select multiple photos from the iOS photo library for a project.
 - The app must request photo-library access using the appropriate iOS permission flow.
 - The user can review selected photos before generating the collage.
-- The user can add, remove, or reorder selected photos while editing a task.
+- The user can add, remove, or reorder selected photos while editing a project.
 - The app must require at least two photos before generating a collage.
-- A collage task supports up to 12 photos in the MVP.
+- A project supports up to 12 photos in the MVP.
 - The app must handle unavailable, deleted, or inaccessible source photos gracefully and explain which photos need to be replaced.
 
 ### 4.3 Automatic Collage Generation
@@ -61,7 +61,7 @@ The collage output is a single image generated from a collage task. Updating a t
 - Supported layouts assign photos to frames using crop loss, source resolution, and detected-subject position instead of retaining selection order; for example, the best landscape photo is placed in a full-width final-row frame. Equal-fit placement uses stable photo identity rather than picker order.
 - Dragging to swap photos or manually reordering the photo list locks that explicit order. The user can restore automatic placement with Arrange Photos by Best Fit.
 - After the app selects a layout, the user can choose a different compatible layout.
-- Every fixed-canvas layout containing two or more photos overlays draggable divider handles in the Layout tool, including grids, Hero, Editorial, Mondrian, masonry, brick, and slanted layouts. Dragging a divider resizes its neighboring photo regions while preserving the template's overall geometry. Cells enforce a minimum size, customized divider positions persist with the task and are used consistently in previews, thumbnails, and exports, and the user can reset all dividers to the template defaults. Natural-size Flow layouts omit divider adjustment so every photo remains uncropped.
+- Every fixed-canvas layout containing two or more photos overlays draggable divider handles in the Layout tool, including grids, Hero, Editorial, Mondrian, masonry, brick, and slanted layouts. Dragging a divider resizes its neighboring photo regions while preserving the template's overall geometry. Cells enforce a minimum size, customized divider positions persist with the project and are used consistently in previews, thumbnails, and exports, and the user can reset all dividers to the template defaults. Natural-size Flow layouts omit divider adjustment so every photo remains uncropped.
 - The app provides a curated, photo-count-specific layout catalog across photo counts 1 through 12.
 - The layout browser is organized into Grid, Featured, Mosaic, Slanted, and Flow groups. Featured combines Hero and Editorial compositions into one group and omits duplicate two-band Editorial layouts that match Hero edge structures. Fixed-canvas strips, creative card-stack, and circular-mask layouts are excluded.
 - Grid templates use intentional row compositions for each supported photo count. Every row expands its frames across the full canvas width without empty placeholder cells. Examples include 3–2–3 and 2–3–3 for eight photos, and 4–4–3 and 4–3–4 for eleven photos. Generic one-column and incomplete-grid-fill templates are not offered. Grid row heights and individual cell widths adapt to the selected photos' aspect ratios to retain as much source-photo area as possible while still filling the canvas.
@@ -70,7 +70,7 @@ The collage output is a single image generated from a collage task. Updating a t
 - Featured directly presents every distinct composition with one, two, or three main photos plus the remaining photos in smaller secondary regions whenever the selected photo count leaves at least one secondary photo. There is no separate main-photo-count control; each layout thumbnail and title communicates its emphasis count. Visually identical frame geometry is shown only once even when multiple internal templates could produce it. Main-photo frames remain visibly larger on average than secondary frames, and automatic best-fit placement assigns suitable photos to both regions.
 - The Layout tool provides Custom Cuts outside the built-in family filters. The user builds an exact-fill rectangular layout by repeatedly selecting a region and splitting it side-by-side or top-to-bottom until there is exactly one region for every selected photo. Custom Cuts must never overlap or leave unused canvas space.
 - The user can apply a Custom Cuts layout once or save it to My Layouts for later reuse. A saved custom layout has a user-editable name and fixed compatible photo count, and the user can apply, rename, update, duplicate, or delete it without changing collages that already use its geometry.
-- Custom layout geometry, including later divider adjustments, is persisted with the collage task. The reusable My Layouts library is also persisted locally and remains available after the app relaunches.
+- Custom layout geometry, including later divider adjustments, is persisted with the project. The reusable My Layouts library is also persisted locally and remains available after the app relaunches.
 - The Slanted family provides nine gentle, bold, rising, falling, zigzag, rhythmic, and featured-row mosaic variants for every selection from 2 through 12 photos; a clean poster-matte option represents the family for one photo. Slanted layouts distribute photos across multiple rows and columns with angled horizontal and vertical boundaries instead of presenting all photos in one row or one column whenever the photo count allows both dimensions.
 - Each photo count presents only compatible templates that contain exactly one frame for every selected photo.
 - Rotations, mirrors, proportions, and other variants count as separate templates only when they produce a meaningfully different composition; photo-order permutations do not count as separate layouts.
@@ -88,7 +88,7 @@ The collage output is a single image generated from a collage task. Updating a t
 - The layout browser scores templates for the current photos and ranks stronger crop-retention options first. Featured always shows every distinct one-, two-, and three-main composition so the user can choose emphasis directly; other families hide templates that crop materially more image area than the best options. A filtered layout normally qualifies only when it retains at least 68% of source-photo area on average and at least 42% for every individual photo; when a canvas/photo combination makes those levels geometrically impossible, only layouts within 10 percentage points of the best achievable fit are offered.
 - When photos are added or removed, the app preserves the corresponding layout variant for the new photo count when one exists and otherwise selects a compatible fallback.
 - When a layout or image dimension changes, the app recalculates subject-aware crops while retaining manual crop adjustments where they remain valid.
-- Regenerating an unchanged task should produce a visually equivalent collage.
+- Regenerating an unchanged project should produce a visually equivalent collage.
 
 ### 4.4 Subject-Aware Cropping
 
@@ -100,34 +100,34 @@ The collage output is a single image generated from a collage task. Updating a t
 - The user can drag a photo within its frame to reposition the crop.
 - A coordinated photo gesture prevents crop and swap interactions from competing: hold briefly and drag to reposition the crop, or keep holding for roughly half a second before dragging to enter swap mode. Swap mode highlights the destination frame and confirms activation with stronger haptic feedback.
 - The user can pinch a photo with two fingers to zoom in or out between the fitted crop and the supported maximum zoom.
-- Manual crop adjustments are saved as part of the collage task.
-- The selected zoom level is saved as part of the collage task.
+- Manual crop adjustments are saved as part of the project.
+- The selected zoom level is saved as part of the project.
 
-### 4.5 Task Persistence and Editing
+### 4.5 Project Persistence and Editing
 
-- Each collage task is saved within its parent project.
-- A saved task includes, at minimum:
+- Each project is saved within its parent collection.
+- A saved project includes, at minimum:
   - A unique identifier.
-  - Its parent project identifier.
+  - Its parent collection identifier.
   - Creation and last-modified dates.
   - References to the selected source photos.
   - Photo ordering.
   - Layout and output dimensions.
-  - A stable catalog layout identifier, with migration support for tasks saved using legacy layout values.
+  - A stable catalog layout identifier, with migration support for projects saved using legacy layout values.
   - A self-contained snapshot of the resolved layout geometry, including normalized frame rectangles, clip polygons, rotation, corner treatment, aspect-fit behavior, photo-to-frame assignment, and output aspect ratio. Reopening, rendering, or exporting a saved collage must use this snapshot and must not change if its original catalog template is later modified, renamed, or removed.
   - Selected output resolution.
   - Selected output image format and format-specific settings.
   - Selected output-quality preset.
   - Automatic and user-adjusted crop information.
   - A reference to the latest generated collage output, when available.
-- The user can view a project's saved collage tasks.
-- Saving a task generates or refreshes a lightweight thumbnail of the actual collage using its layout, photo crops, spacing, canvas corners, and background. The thumbnail is persisted with the task assets and loaded directly after relaunch; older tasks missing one are regenerated when their project list is opened.
-- The user can reopen a task and recreate its collage.
-- The user can edit a task by changing its photos, ordering, layout, or crops.
-- When renaming an "Untitled Collage," the title field starts empty and focused so the user can type the replacement name immediately.
-- Changes to a task persist after the app closes and relaunches.
-- The user can delete a task after confirming the action.
-- Deleting a task must not delete its original photos from the user's photo library.
+- The user can view a collection's saved projects.
+- Saving a project generates or refreshes a lightweight thumbnail of the actual collage using its layout, photo crops, spacing, canvas corners, and background. The thumbnail is persisted with the project assets and loaded directly after relaunch; older projects missing one are regenerated when their collection list is opened.
+- The user can reopen a project and recreate its collage.
+- The user can edit a project by changing its photos, ordering, layout, or crops.
+- When renaming an "Untitled Project," the title field starts empty and focused so the user can type the replacement name immediately.
+- Changes to a project persist after the app closes and relaunches.
+- The user can delete a project after confirming the action.
+- Deleting a project must not delete its original photos from the user's photo library.
 
 ### 4.6 Saving and Sharing
 
@@ -153,16 +153,16 @@ The collage output is a single image generated from a collage task. Updating a t
 - Changing the output format or quality preset must not alter the saved layout, crops, dimensions, or resolution.
 - If an export destination does not support the selected format, the app must explain the limitation and offer a compatible destination or format.
 - Saving a collage must not overwrite or modify the original photos.
-- Choosing Save or Save and Go Back displays a blocking save-progress bar until the task data and persisted collage thumbnail have finished saving, preventing duplicate save actions.
+- Choosing Save or Save and Go Back displays a blocking save-progress bar until the project data and persisted collage thumbnail have finished saving, preventing duplicate save actions.
 - The user receives clear confirmation when a collage is saved successfully.
 - If saving fails, the app shows an actionable error message.
 - The user can share or export the generated collage using the standard iOS share sheet.
 - Export first opens a full-screen review of the rendered image where the user can pinch or use controls to zoom, drag to inspect different areas, and reset the view before choosing Save to Photos or Share.
-- Leaving the export review without saving or sharing discards its temporary file and does not replace the task's previous export.
+- Leaving the export review without saving or sharing discards its temporary file and does not replace the project's previous export.
 
 ### 4.7 Subscription and Free Use
 
-- The app remains fully usable for creating, editing, saving, and reopening collage tasks without starting a trial or purchasing a subscription.
+- The app remains fully usable for creating, editing, saving, and reopening projects without starting a trial or purchasing a subscription.
 - Free users can preview, save, and share exported collages, but every exported image includes a compact bottom-right MixaFrame brand badge using a polished display font that remains readable at every supported resolution and creates a clear incentive to upgrade for a clean export.
 - The app offers one auto-renewable annual MixaFrame Premium subscription that removes the watermark from saved and shared collage exports.
 - Eligible new subscribers receive a seven-day free trial before the annual subscription charge begins.
@@ -170,17 +170,17 @@ The collage output is a single image generated from a collage task. Updating a t
 - The paywall displays localized App Store pricing, trial eligibility, annual renewal terms, a Restore Purchases action, a Continue Free action, privacy information, and terms of use.
 - The app listens for StoreKit transaction updates and refreshes subscription status after purchases, restorations, renewals, expirations, revocations, and upgrades.
 - Purchases must be verified by StoreKit before watermark-free access is granted.
-- Task thumbnails and the interactive editor preview do not include the subscription watermark; the watermark is applied only to generated export files and their export review previews.
+- Project thumbnails and the interactive editor preview do not include the subscription watermark; the watermark is applied only to generated export files and their export review previews.
 
 ## 5. User Experience Requirements
 
-- The main navigation presents projects as the top-level view.
-- Opening a project presents its collage tasks and an action to create a new task.
-- Creating or editing a collage task uses a full-screen editor rather than a partial-height sheet.
-- The full-screen editor provides a Back control that returns to the containing project.
+- The main navigation presents collections as the top-level view.
+- Opening a collection presents its projects and an action to create a new project.
+- Creating or editing a project uses a full-screen editor rather than a partial-height sheet.
+- The full-screen editor provides a Back control that returns to the containing collection.
 - Opening an existing collage starts with the settings panel collapsed so no editor dialog obscures the collage; the user can expand a tool from the vertical tool rail.
-- Using Back compares the current user-editable collage state with the last saved state. It returns immediately when they match. When real changes exist, an icon-labeled dialog offers Save and Export, Save and Leave, or Discard Changes; free users also receive a fully clickable Subscribe to remove the watermark row that opens the subscription screen. Saving is unavailable until the task meets the minimum photo requirement.
-- Discarding a new or changed task removes newly imported photo copies that are not referenced by another saved task.
+- Using Back compares the current user-editable collage state with the last saved state. It returns immediately when they match. When real changes exist, an icon-labeled dialog offers Save and Export, Save and Leave, or Discard Changes; free users also receive a fully clickable Subscribe to remove the watermark row that opens the subscription screen. Saving is unavailable until the project meets the minimum photo requirement.
+- Discarding a new or changed project removes newly imported photo copies that are not referenced by another saved project.
 - The collage creation flow guides the user through photo selection, preview, adjustment, and saving.
 - The collage editor is canvas-first: the preview uses the full available workspace when settings are collapsed, and editing tools appear as a compact vertical icon rail over the canvas edge.
 - Selecting a tool icon slides that tool's scrollable settings panel up from the bottom. The panel uses approximately the lower half of the editor while the complete collage preview resizes into the upper half and remains visible.
@@ -192,14 +192,14 @@ The collage output is a single image generated from a collage task. Updating a t
 - Long-running image analysis or rendering displays progress and remains cancellable where practical.
 - Destructive actions require confirmation.
 - The app supports standard iOS accessibility features, including VoiceOver labels, Dynamic Type where applicable, and sufficient color contrast.
-- The interface clearly distinguishes between saving changes to a task and exporting its generated image.
+- The interface clearly distinguishes between saving changes to a project and exporting its generated image.
 
 ## 6. Data and Privacy Requirements
 
 - The app requests only the photo access needed for selection and export.
 - The app explains why photo access is needed before or as part of the system permission request.
 - Original photos must never be altered or deleted by the app.
-- Project and task data is stored locally for the MVP.
+- Collection and project data is stored locally for the MVP.
 - Photo analysis and subject detection should run on-device for the MVP unless a future requirement explicitly introduces a cloud service and its privacy disclosures.
 - The app must remain usable when the device is offline, except for features explicitly added later that require a network connection.
 
@@ -210,24 +210,24 @@ The collage output is a single image generated from a collage task. Updating a t
 - Photo import generates a 256-pixel list thumbnail and a 1600-pixel editing preview off the main thread; the editor must not synchronously decode full-resolution originals.
 - Every generated photo thumbnail and editing preview is persisted and loaded from disk on memory-cache misses, so reopening a collage reuses derived images without decoding the originals again.
 - Editing previews and thumbnails are memory-cached with bounded memory use, while original images are loaded only for final export or explicit full-screen inspection.
-- When the app returns to the foreground, the current project and collage views reload any previews or collage thumbnails evicted from memory directly from their persisted files without requiring the user to leave and reopen the screen.
+- When the app returns to the foreground, the current collection and collage views reload any previews or collage thumbnails evicted from memory directly from their persisted files without requiring the user to leave and reopen the screen.
 - When a Flow collage's requested dimensions exceed the renderer's safe side or total-pixel limits, export preserves the complete strip and automatically scales it uniformly to the largest safe bitmap. The export preview identifies the requested and actual dimensions instead of failing or requiring photos to be removed.
 - From the collage editor, the user can double-tap a collage frame or use an explicit View Original Photo action to open that source photo full-screen.
 - The original-photo viewer loads the locally preserved original-resolution file off the main thread and supports pinch zoom, pan, double-tap zoom/reset, explicit zoom controls, and close.
 - In the Photos panel, tapping the thumbnail, the central photo details area, or the expand button opens the original photo viewer.
 - While dragging a photo to swap positions, a floating preview of the dragged photo follows the user's finger and displays a switch icon at its top-right. The destination frame is highlighted and also displays a switch icon. The drag-and-drop operation uses move semantics rather than showing the system copy “+” indicator.
-- Existing tasks generate missing derived images lazily without changing their saved crops or requiring manual migration.
-- Saving an existing task after removing or replacing a photo removes that photo's unreferenced local original copy, editing preview, list thumbnail, memory-cache entries, stored focus metadata, and stale rendered export. Assets still referenced by another saved task are retained, and startup maintenance prunes orphaned generated files left by interruptions.
+- Existing projects generate missing derived images lazily without changing their saved crops or requiring manual migration.
+- Saving an existing project after removing or replacing a photo removes that photo's unreferenced local original copy, editing preview, list thumbnail, memory-cache entries, stored focus metadata, and stale rendered export. Assets still referenced by another saved project are retained, and startup maintenance prunes orphaned generated files left by interruptions.
 - The app should manage memory carefully when processing multiple high-resolution photos.
-- The app should preserve saved project and task data across normal app upgrades.
-- If collage generation is interrupted or fails, the saved task should remain recoverable and editable.
+- The app should preserve saved collection and project data across normal app upgrades.
+- If collage generation is interrupted or fails, the saved project should remain recoverable and editable.
 
 ## 8. MVP Acceptance Criteria
 
 The MVP is complete when a user can:
 
-1. Create and name a project.
-2. Create a collage task within that project.
+1. Create and name a collection.
+2. Create a project within that collection.
 3. Select at least two photos from the iOS photo library.
 4. Preview one automatically sized collage containing every selected photo.
 5. See automatic crops that attempt to keep each photo's main subject visible.
@@ -237,17 +237,17 @@ The MVP is complete when a user can:
 9. Select an output resolution, with 4K used by default and 8K (8192 pixels) available as the maximum.
 10. Choose JPEG, PNG, WebP, or Apple HEIF as the output format.
 11. Choose Space Saver, Balanced, or Best Quality and understand the corresponding quality/file-size tradeoff.
-12. Save the task, close the app, and later reopen the task with its photos, ordering, layout, dimensions, resolution, output format, output quality, and crop adjustments intact.
+12. Save the project, close the app, and later reopen the project with its photos, ordering, layout, dimensions, resolution, output format, output quality, and crop adjustments intact.
 13. Update and regenerate the saved collage.
 14. Save the generated collage to the photo library or share it.
-15. Delete an individual task without affecting the original photos.
-16. Store and manage multiple collage tasks within one project.
+15. Delete an individual project without affecting the original photos.
+16. Store and manage multiple projects within one collection.
 17. Hide and restore editor controls while keeping the collage visible.
 18. Reposition and zoom an individual photo directly on the collage canvas.
 19. Swap two photos using drag and drop on the collage canvas.
 20. Browse compatible layouts by family for any selection from 1 through 12 photos.
 21. Render and export rectangular and multi-row, multi-column slanted-mosaic layouts consistently with their on-screen previews.
-22. Choose a white or dark collage background and preserve that choice when the task is saved and reopened.
+22. Choose a white or dark collage background and preserve that choice when the project is saved and reopened.
 23. Review the rendered export full-screen, zoom and pan to inspect it, and then choose Save to Photos, Share, or Back without saving.
 24. Continue using every collage-editing feature without starting a trial or subscription and receive a clearly watermarked export.
 25. Start an eligible seven-day trial or annual subscription, restore an existing purchase, and export without a watermark while the entitlement is active.
@@ -259,7 +259,7 @@ The MVP is complete when a user can:
 - The first release targets iPhone running iOS 17 or later; iPad-specific layouts can be defined later.
 - Each photo appears in one frame in the automatically generated collage.
 - Automatic sizing selects from a defined set of common aspect ratios and image dimensions rather than creating an arbitrary standard canvas size.
-- A collage task belongs to exactly one project.
+- A project belongs to exactly one collection.
 - Local persistence is sufficient for the MVP; account login and cross-device synchronization are out of scope.
 
 ## 10. Open Questions
@@ -269,16 +269,16 @@ The MVP is complete when a user can:
 - What format-specific encoding values should Space Saver, Balanced, and Best Quality use for JPEG and WebP?
 - Should borders, rounded corners, text, stickers, or filters be included in the MVP?
 - If an original photo is removed from the photo library, should the app retain its own copy or ask the user to replace it?
-- Should deleting a project also delete collage images that were previously exported to the photo library? The recommended behavior is no.
-- Is task version history required, or is saving only the latest state sufficient?
-- Should projects or tasks support additional sorting or search options?
+- Should deleting a collection also delete collage images that were previously exported to the photo library? The recommended behavior is no.
+- Is project version history required, or is saving only the latest state sufficient?
+- Should collections or projects support additional sorting or search options?
 - Will iCloud synchronization or collaboration be required in a later release?
 
 ## 11. Out of Scope for the Initial MVP
 
 - User accounts and authentication.
 - Cloud backup or cross-device synchronization.
-- Collaborative editing or project sharing.
+- Collaborative editing or collection sharing.
 - Video collages or animated output.
 - Cloud-based photo analysis.
 - Advanced graphic-design tools unless added through a later requirements update.

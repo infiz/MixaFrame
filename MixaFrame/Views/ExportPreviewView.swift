@@ -20,7 +20,7 @@ struct ExportPreviewView: View {
       ZoomableImageViewer(
         image: export.previewImage,
         maximumScale: 8,
-        accessibilityTitle: "Exported collage preview"
+        accessibilityTitle: "Exported project preview"
       )
       .background(Color.black.ignoresSafeArea())
       .navigationTitle("Export Preview")
@@ -116,7 +116,7 @@ struct ExportPreviewView: View {
     ) {
       Button("OK", role: .cancel) { errorMessage = nil }
     } message: {
-      Text(errorMessage ?? "The collage could not be saved.")
+      Text(errorMessage ?? "The project could not be saved.")
     }
   }
 
@@ -510,7 +510,7 @@ private struct ZoomableImageViewer: View {
             } label: {
               Image(systemName: "scope")
             }
-            .accessibilityLabel("Use View Center as Collage Focus")
+            .accessibilityLabel("Use View Center as Project Focus")
           }
         }
         .font(.title3)
@@ -524,7 +524,7 @@ private struct ZoomableImageViewer: View {
       .accessibilityHint(
         onSelectFocus == nil
           ? "Pinch to zoom and drag to move the preview. Double tap to zoom or reset."
-          : "Drag the crop shape or tap a point to reposition the collage crop. Pinch to zoom the viewer, or double tap to zoom and reset."
+          : "Drag the crop shape or tap a point to reposition the project crop. Pinch to zoom the viewer, or double tap to zoom and reset."
       )
     }
   }
@@ -582,7 +582,7 @@ private struct ZoomableImageViewer: View {
         )
       )
       .allowsHitTesting(!cropConfiguration.usesAspectFit)
-      .accessibilityLabel("Area used in the collage")
+      .accessibilityLabel("Area used in the project")
       .accessibilityHint("Drag to reposition this crop area")
     }
   }

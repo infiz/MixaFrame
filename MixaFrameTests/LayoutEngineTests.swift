@@ -7,6 +7,23 @@ import XCTest
 
 final class LayoutEngineTests: XCTestCase {
   @MainActor
+  func testSharedAppStorePersistsCollectionsAcrossInstances() async {
+    let directory = FileManager.default.temporaryDirectory
+      .appendingPathComponent(
+        "MixaFrameSharedStoreTests-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    let writer = AppStore(rootDirectory: directory)
+    await writer.waitUntilLoaded()
+    let collectionID = await writer.createCollection(name: "Shared Library")
+
+    let reader = AppStore(rootDirectory: directory)
+    await reader.waitUntilLoaded()
+
+    XCTAssertEqual(reader.collection(id: collectionID)?.name, "Shared Library")
+  }
+
+  @MainActor
   func testSceneActivationRequestsImageCacheReload() async {
     let directory = FileManager.default.temporaryDirectory
       .appendingPathComponent(
@@ -22,12 +39,12 @@ final class LayoutEngineTests: XCTestCase {
     XCTAssertEqual(store.imageCacheReloadGeneration, initialGeneration + 1)
   }
 
-  func testExportedPhotoLibraryIdentifierPersistsWithCollage() throws {
-    var task = CollageTask.new(projectID: UUID())
-    task.exportedPhotoLibraryAssetIdentifier = "asset-local-identifier"
+  func testExportedPhotoLibraryIdentifierPersistsWithProject() throws {
+    var project = Project.new(collectionID: UUID())
+    project.exportedPhotoLibraryAssetIdentifier = "asset-local-identifier"
 
-    let data = try JSONEncoder().encode(task)
-    let decoded = try JSONDecoder().decode(CollageTask.self, from: data)
+    let data = try JSONEncoder().encode(project)
+    let decoded = try JSONDecoder().decode(Project.self, from: data)
 
     XCTAssertEqual(decoded.exportedPhotoLibraryAssetIdentifier, "asset-local-identifier")
   }
@@ -44,18 +61,18 @@ final class LayoutEngineTests: XCTestCase {
     MixaFrameExportPreferences.save(spacing: 24, defaults: defaults)
     MixaFrameExportPreferences.save(canvasCornerRadius: 18, defaults: defaults)
 
-    var task = CollageTask.new(projectID: UUID())
-    MixaFrameExportPreferences.apply(to: &task, defaults: defaults)
+    var project = Project.new(collectionID: UUID())
+    MixaFrameExportPreferences.apply(to: &project, defaults: defaults)
 
-    XCTAssertEqual(task.outputFormat, .heif)
-    XCTAssertEqual(task.quality, .best)
-    XCTAssertEqual(task.outputMaxDimension, 8192)
-    XCTAssertEqual(task.background, .dark)
-    XCTAssertEqual(task.spacing, 24)
-    XCTAssertEqual(task.canvasCornerRadius, 18)
+    XCTAssertEqual(project.outputFormat, .heif)
+    XCTAssertEqual(project.quality, .best)
+    XCTAssertEqual(project.outputMaxDimension, 8192)
+    XCTAssertEqual(project.background, .dark)
+    XCTAssertEqual(project.spacing, 24)
+    XCTAssertEqual(project.canvasCornerRadius, 18)
   }
 
-  func testEditorPreferencesApplyOnlyToNewCollages() throws {
+  func testEditorPreferencesApplyOnlyToNewProjects() throws {
     let suiteName = "EditorPreferencePolicyTests.\(UUID().uuidString)"
     let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
     defer { defaults.removePersistentDomain(forName: suiteName) }
@@ -63,23 +80,23 @@ final class LayoutEngineTests: XCTestCase {
     MixaFrameExportPreferences.save(outputMaxDimension: 8192, defaults: defaults)
     MixaFrameExportPreferences.save(background: .dark, defaults: defaults)
 
-    let projectID = UUID()
-    let newDraft = CollageEditorView.initialDraft(
-      projectID: projectID,
-      task: nil,
+    let collectionID = UUID()
+    let newDraft = ProjectEditorView.initialDraft(
+      collectionID: collectionID,
+      project: nil,
       defaults: defaults
     )
     XCTAssertEqual(newDraft.outputFormat, .heif)
     XCTAssertEqual(newDraft.outputMaxDimension, 8192)
     XCTAssertEqual(newDraft.background, .dark)
 
-    var savedTask = CollageTask.new(projectID: projectID)
-    savedTask.outputFormat = .png
-    savedTask.outputMaxDimension = 1920
-    savedTask.background = .white
-    let reopenedDraft = CollageEditorView.initialDraft(
-      projectID: projectID,
-      task: savedTask,
+    var savedProject = Project.new(collectionID: collectionID)
+    savedProject.outputFormat = .png
+    savedProject.outputMaxDimension = 1920
+    savedProject.background = .white
+    let reopenedDraft = ProjectEditorView.initialDraft(
+      collectionID: collectionID,
+      project: savedProject,
       defaults: defaults
     )
     XCTAssertEqual(reopenedDraft.outputFormat, .png)
@@ -88,33 +105,33 @@ final class LayoutEngineTests: XCTestCase {
   }
 
   func testFourKSquareOutput() {
-    var task = CollageTask.new(projectID: UUID())
-    task.canvas = .square
-    task.outputMaxDimension = 4096
+    var project = Project.new(collectionID: UUID())
+    project.canvas = .square
+    project.outputMaxDimension = 4096
 
-    XCTAssertEqual(LayoutEngine.outputSize(for: task), CGSize(width: 4096, height: 4096))
+    XCTAssertEqual(LayoutEngine.outputSize(for: project), CGSize(width: 4096, height: 4096))
   }
 
   func testEightKOutputIsAvailableForEveryStandardCanvasShape() {
-    var task = CollageTask.new(projectID: UUID())
-    task.outputMaxDimension = 8192
+    var project = Project.new(collectionID: UUID())
+    project.outputMaxDimension = 8192
 
-    task.canvas = .square
-    XCTAssertEqual(LayoutEngine.outputSize(for: task), CGSize(width: 8192, height: 8192))
+    project.canvas = .square
+    XCTAssertEqual(LayoutEngine.outputSize(for: project), CGSize(width: 8192, height: 8192))
     XCTAssertGreaterThanOrEqual(CollageRenderer.maximumPixelCount, 8192 * 8192)
 
-    task.canvas = .landscape
-    XCTAssertEqual(LayoutEngine.outputSize(for: task), CGSize(width: 8192, height: 5461))
+    project.canvas = .landscape
+    XCTAssertEqual(LayoutEngine.outputSize(for: project), CGSize(width: 8192, height: 5461))
 
-    task.canvas = .portrait
-    XCTAssertEqual(LayoutEngine.outputSize(for: task), CGSize(width: 6554, height: 8192))
+    project.canvas = .portrait
+    XCTAssertEqual(LayoutEngine.outputSize(for: project), CGSize(width: 6554, height: 8192))
   }
 
   func testFlowLayoutsUseResolutionAsTheirSharedDimension() throws {
-    var task = CollageTask.new(projectID: UUID())
-    task.outputMaxDimension = 1000
-    task.spacing = 10
-    task.photos = [
+    var project = Project.new(collectionID: UUID())
+    project.outputMaxDimension = 1000
+    project.spacing = 10
+    project.photos = [
       CollagePhoto(fileName: "wide", pixelWidth: 2000, pixelHeight: 1000),
       CollagePhoto(fileName: "tall", pixelWidth: 1000, pixelHeight: 2000),
       CollagePhoto(fileName: "square", pixelWidth: 1000, pixelHeight: 1000),
@@ -124,9 +141,9 @@ final class LayoutEngineTests: XCTestCase {
       LayoutCatalog.templates(photoCount: 3).first { $0.title == "Horizontal Flow" }
     )
     XCTAssertEqual(horizontal.family.title, "Flow")
-    task.layoutID = horizontal.id
-    let horizontalSize = LayoutEngine.outputSize(for: task)
-    let horizontalFrames = LayoutEngine.layoutFrames(for: task, in: horizontalSize)
+    project.layoutID = horizontal.id
+    let horizontalSize = LayoutEngine.outputSize(for: project)
+    let horizontalFrames = LayoutEngine.layoutFrames(for: project, in: horizontalSize)
 
     XCTAssertEqual(horizontalSize, CGSize(width: 3520, height: 1000))
     XCTAssertEqual(
@@ -140,9 +157,9 @@ final class LayoutEngineTests: XCTestCase {
     let vertical = try XCTUnwrap(
       LayoutCatalog.templates(photoCount: 3).first { $0.title == "Vertical Flow" }
     )
-    task.layoutID = vertical.id
-    let verticalSize = LayoutEngine.outputSize(for: task)
-    let verticalFrames = LayoutEngine.layoutFrames(for: task, in: verticalSize)
+    project.layoutID = vertical.id
+    let verticalSize = LayoutEngine.outputSize(for: project)
+    let verticalFrames = LayoutEngine.layoutFrames(for: project, in: verticalSize)
 
     XCTAssertEqual(verticalSize, CGSize(width: 1000, height: 3520))
     XCTAssertEqual(
@@ -152,28 +169,28 @@ final class LayoutEngineTests: XCTestCase {
         CGRect(x: 0, y: 510, width: 1000, height: 2000),
         CGRect(x: 0, y: 2520, width: 1000, height: 1000),
       ])
-    XCTAssertTrue(LayoutEngine.layoutDividers(for: task, in: verticalSize).isEmpty)
+    XCTAssertTrue(LayoutEngine.layoutDividers(for: project, in: verticalSize).isEmpty)
 
-    task.layoutID = nil
-    task.layout = .verticalStrip
-    XCTAssertEqual(LayoutEngine.selectedTemplate(for: task).title, "Vertical Flow")
+    project.layoutID = nil
+    project.layout = .verticalStrip
+    XCTAssertEqual(LayoutEngine.selectedTemplate(for: project).title, "Vertical Flow")
   }
 
   func testOversizedFlowExportIsUniformlyScaledToRendererLimits() throws {
-    var task = CollageTask.new(projectID: UUID())
-    task.outputMaxDimension = 8192
-    task.spacing = 0
-    task.photos = (0..<12).map { index in
+    var project = Project.new(collectionID: UUID())
+    project.outputMaxDimension = 8192
+    project.spacing = 0
+    project.photos = (0..<12).map { index in
       CollagePhoto(fileName: "square-\(index)", pixelWidth: 1000, pixelHeight: 1000)
     }
-    task.layoutID = try XCTUnwrap(
-      LayoutCatalog.templates(photoCount: task.photos.count).first {
+    project.layoutID = try XCTUnwrap(
+      LayoutCatalog.templates(photoCount: project.photos.count).first {
         $0.title == "Horizontal Flow"
       }
     ).id
 
-    let requestedSize = LayoutEngine.outputSize(for: task)
-    let exportSize = CollageRenderer.exportOutputSize(for: task)
+    let requestedSize = LayoutEngine.outputSize(for: project)
+    let exportSize = CollageRenderer.exportOutputSize(for: project)
 
     XCTAssertGreaterThan(requestedSize.width, CollageRenderer.maximumSide)
     XCTAssertLessThanOrEqual(exportSize.width, CollageRenderer.maximumSide)
@@ -190,23 +207,23 @@ final class LayoutEngineTests: XCTestCase {
   }
 
   func testSavedFlowLayoutKeepsDynamicSizingWhenResolutionChanges() throws {
-    var task = CollageTask.new(projectID: UUID())
-    task.outputMaxDimension = 1000
-    task.spacing = 0
-    task.photos = [
+    var project = Project.new(collectionID: UUID())
+    project.outputMaxDimension = 1000
+    project.spacing = 0
+    project.photos = [
       CollagePhoto(fileName: "first", pixelWidth: 1600, pixelHeight: 1000),
       CollagePhoto(fileName: "second", pixelWidth: 900, pixelHeight: 1200),
     ]
-    task.layoutID = try XCTUnwrap(
+    project.layoutID = try XCTUnwrap(
       LayoutCatalog.templates(photoCount: 2).first { $0.title == "Horizontal Flow" }
     ).id
-    task.savedLayoutSnapshot = try XCTUnwrap(LayoutEngine.savedLayoutSnapshot(for: task))
+    project.savedLayoutSnapshot = try XCTUnwrap(LayoutEngine.savedLayoutSnapshot(for: project))
 
-    XCTAssertEqual(LayoutEngine.outputSize(for: task), CGSize(width: 2350, height: 1000))
+    XCTAssertEqual(LayoutEngine.outputSize(for: project), CGSize(width: 2350, height: 1000))
 
-    task.outputMaxDimension = 2000
-    XCTAssertEqual(LayoutEngine.outputSize(for: task), CGSize(width: 4700, height: 2000))
-    let frames = LayoutEngine.layoutFrames(for: task, in: LayoutEngine.outputSize(for: task))
+    project.outputMaxDimension = 2000
+    XCTAssertEqual(LayoutEngine.outputSize(for: project), CGSize(width: 4700, height: 2000))
+    let frames = LayoutEngine.layoutFrames(for: project, in: LayoutEngine.outputSize(for: project))
     XCTAssertEqual(frames[0].rect, CGRect(x: 0, y: 0, width: 3200, height: 2000))
     XCTAssertEqual(frames[1].rect, CGRect(x: 3200, y: 0, width: 1500, height: 2000))
   }
@@ -255,27 +272,27 @@ final class LayoutEngineTests: XCTestCase {
   }
 
   func testBackgroundChoiceUsesStableExportColors() {
-    var task = CollageTask.new(projectID: UUID())
+    var project = Project.new(collectionID: UUID())
 
-    XCTAssertEqual(task.background, .white)
-    XCTAssertEqual(task.backgroundHex, "FFFFFF")
+    XCTAssertEqual(project.background, .white)
+    XCTAssertEqual(project.backgroundHex, "FFFFFF")
 
-    task.background = .dark
+    project.background = .dark
 
-    XCTAssertEqual(task.background, .dark)
-    XCTAssertEqual(task.backgroundHex, "111111")
+    XCTAssertEqual(project.background, .dark)
+    XCTAssertEqual(project.backgroundHex, "111111")
   }
 
-  func testNewCollageTitleStartsEmptyAndCanBeAdded() {
-    var task = CollageTask.new(projectID: UUID())
-    XCTAssertEqual(task.name, "")
-    XCTAssertEqual(task.titleForEditing, "")
+  func testNewProjectTitleStartsEmptyAndCanBeAdded() {
+    var project = Project.new(collectionID: UUID())
+    XCTAssertEqual(project.name, "")
+    XCTAssertEqual(project.titleForEditing, "")
 
-    task.name = "Summer Trip"
-    XCTAssertEqual(task.titleForEditing, "Summer Trip")
+    project.name = "Summer Trip"
+    XCTAssertEqual(project.titleForEditing, "Summer Trip")
   }
 
-  func testExportFileNameUsesLocalTimestampProjectAndCollageNames() throws {
+  func testExportFileNameUsesLocalTimestampCollectionAndProjectNames() throws {
     var calendar = Calendar(identifier: .gregorian)
     calendar.timeZone = try XCTUnwrap(TimeZone(secondsFromGMT: 0))
     let date = try XCTUnwrap(
@@ -285,8 +302,8 @@ final class LayoutEngineTests: XCTestCase {
     let localTimeZone = try XCTUnwrap(TimeZone(secondsFromGMT: -7 * 60 * 60))
 
     let name = CollageRenderer.exportFileName(
-      projectName: "Summer Trip",
-      collageName: "Beach Day",
+      collectionName: "Summer Trip",
+      projectName: "Beach Day",
       format: .jpeg,
       date: date,
       timeZone: localTimeZone
@@ -295,8 +312,8 @@ final class LayoutEngineTests: XCTestCase {
     XCTAssertEqual(name, "20260814-090509-Summer-Trip-Beach-Day.jpg")
 
     let sanitized = CollageRenderer.exportFileName(
-      projectName: "Family / Summer: 2026",
-      collageName: "Kids?*<>|\" 😀",
+      collectionName: "Family / Summer: 2026",
+      projectName: "Kids?*<>|\" 😀",
       format: .png,
       date: date,
       timeZone: localTimeZone
@@ -304,8 +321,8 @@ final class LayoutEngineTests: XCTestCase {
     XCTAssertEqual(sanitized, "20260814-090509-Family-Summer-2026-Kids.png")
 
     let bounded = CollageRenderer.exportFileName(
-      projectName: String(repeating: "é", count: 200),
-      collageName: String(repeating: "Album", count: 100),
+      collectionName: String(repeating: "é", count: 200),
+      projectName: String(repeating: "Album", count: 100),
       format: .webP,
       date: date,
       timeZone: localTimeZone
@@ -330,7 +347,7 @@ final class LayoutEngineTests: XCTestCase {
   }
 
   func testEditorDirtyStateTracksOnlyUserEditableChanges() {
-    var saved = CollageTask.new(projectID: UUID())
+    var saved = Project.new(collectionID: UUID())
     saved.photos = [CollagePhoto(fileName: "photo", pixelWidth: 1200, pixelHeight: 800)]
     var draft = saved
 
@@ -353,14 +370,14 @@ final class LayoutEngineTests: XCTestCase {
   }
 
   func testCanvasCornerSizeDoesNotRoundIndividualPhotoFrames() {
-    var task = CollageTask.new(projectID: UUID())
-    task.photos = (0..<4).map {
+    var project = Project.new(collectionID: UUID())
+    project.photos = (0..<4).map {
       CollagePhoto(fileName: "photo-\($0)", pixelWidth: 1200, pixelHeight: 900)
     }
-    task.canvasCornerRadius = 18
+    project.canvasCornerRadius = 18
 
     let standardFrames = LayoutEngine.layoutFrames(
-      for: task,
+      for: project,
       in: CGSize(width: 1000, height: 1000)
     )
     XCTAssertTrue(
@@ -516,7 +533,7 @@ final class LayoutEngineTests: XCTestCase {
 
     let store = AppStore(rootDirectory: directory)
     await store.waitUntilLoaded()
-    let projectID = await store.createProject(name: "Cleanup")
+    let collectionID = await store.createCollection(name: "Cleanup")
     let image = UIGraphicsImageRenderer(size: CGSize(width: 300, height: 200)).image { context in
       UIColor.systemPurple.setFill()
       context.fill(CGRect(x: 0, y: 0, width: 300, height: 200))
@@ -524,31 +541,31 @@ final class LayoutEngineTests: XCTestCase {
     let photo = try await store.importPhotoData(
       try XCTUnwrap(image.jpegData(compressionQuality: 0.9)))
 
-    var firstTask = CollageTask.new(projectID: projectID)
-    firstTask.photos = [photo]
-    await store.saveTask(firstTask)
-    var secondTask = CollageTask.new(projectID: projectID)
-    secondTask.photos = [photo]
-    await store.saveTask(secondTask)
+    var firstProject = Project.new(collectionID: collectionID)
+    firstProject.photos = [photo]
+    await store.saveProject(firstProject)
+    var secondProject = Project.new(collectionID: collectionID)
+    secondProject.photos = [photo]
+    await store.saveProject(secondProject)
 
     let temporaryExport = directory.appendingPathComponent("temporary-export.jpg")
     try Data("export".utf8).write(to: temporaryExport)
-    let persistedExport = try await store.persistExport(from: temporaryExport, for: firstTask)
+    let persistedExport = try await store.persistExport(from: temporaryExport, for: firstProject)
     XCTAssertEqual(persistedExport.lastPathComponent, temporaryExport.lastPathComponent)
-    firstTask.latestExportFileName = persistedExport.lastPathComponent
-    await store.saveTask(firstTask)
+    firstProject.latestExportFileName = persistedExport.lastPathComponent
+    await store.saveProject(firstProject)
 
-    firstTask.photos = []
-    firstTask.latestExportFileName = nil
-    await store.saveTask(firstTask)
+    firstProject.photos = []
+    firstProject.latestExportFileName = nil
+    await store.saveProject(firstProject)
 
     XCTAssertTrue(FileManager.default.fileExists(atPath: store.imageURL(for: photo).path))
     XCTAssertTrue(FileManager.default.fileExists(atPath: store.previewURL(for: photo).path))
     XCTAssertTrue(FileManager.default.fileExists(atPath: store.thumbnailURL(for: photo).path))
     XCTAssertFalse(FileManager.default.fileExists(atPath: persistedExport.path))
 
-    secondTask.photos = []
-    await store.saveTask(secondTask)
+    secondProject.photos = []
+    await store.saveProject(secondProject)
 
     XCTAssertFalse(FileManager.default.fileExists(atPath: store.imageURL(for: photo).path))
     XCTAssertFalse(FileManager.default.fileExists(atPath: store.previewURL(for: photo).path))
@@ -558,7 +575,7 @@ final class LayoutEngineTests: XCTestCase {
   }
 
   @MainActor
-  func testSavedCollageThumbnailPersistsAcrossStoreReload() async throws {
+  func testSavedProjectThumbnailPersistsAcrossStoreReload() async throws {
     let directory = FileManager.default.temporaryDirectory
       .appendingPathComponent(
         "MixaFrameSavedThumbnailTests-\(UUID().uuidString)", isDirectory: true)
@@ -566,7 +583,7 @@ final class LayoutEngineTests: XCTestCase {
 
     let store = AppStore(rootDirectory: directory)
     await store.waitUntilLoaded()
-    let projectID = await store.createProject(name: "Thumbnail Persistence")
+    let collectionID = await store.createCollection(name: "Thumbnail Persistence")
     var photos: [CollagePhoto] = []
     for (index, color) in [UIColor.systemOrange, UIColor.systemBlue].enumerated() {
       let image = UIGraphicsImageRenderer(size: CGSize(width: 320, height: 220)).image {
@@ -581,38 +598,38 @@ final class LayoutEngineTests: XCTestCase {
         ))
     }
 
-    var task = CollageTask.new(projectID: projectID)
-    task.photos = photos
-    let savedTask = await store.saveTask(task)
-    task = try XCTUnwrap(savedTask)
-    let thumbnailURL = store.collageThumbnailURL(for: task)
+    var project = Project.new(collectionID: collectionID)
+    project.photos = photos
+    let savedProject = await store.saveProject(project)
+    project = try XCTUnwrap(savedProject)
+    let thumbnailURL = store.projectThumbnailURL(for: project)
     XCTAssertTrue(FileManager.default.fileExists(atPath: thumbnailURL.path))
-    XCTAssertNotNil(store.collageThumbnailImage(for: task))
+    XCTAssertNotNil(store.projectThumbnailImage(for: project))
 
     let reloadedStore = AppStore(rootDirectory: directory)
     await reloadedStore.waitUntilLoaded()
-    let reloadedTask = try XCTUnwrap(reloadedStore.project(id: projectID)?.tasks.first)
-    XCTAssertNotNil(reloadedTask.savedLayoutSnapshot)
+    let reloadedProject = try XCTUnwrap(reloadedStore.collection(id: collectionID)?.projects.first)
+    XCTAssertNotNil(reloadedProject.savedLayoutSnapshot)
     XCTAssertEqual(
-      reloadedTask.photos.compactMap(\.photoLibraryAssetIdentifier),
+      reloadedProject.photos.compactMap(\.photoLibraryAssetIdentifier),
       ["photo-library-asset-0", "photo-library-asset-1"]
     )
-    await reloadedStore.preloadPersistedThumbnails(for: reloadedTask.photos)
-    XCTAssertTrue(reloadedTask.photos.allSatisfy { reloadedStore.thumbnailImage(for: $0) != nil })
-    XCTAssertTrue(reloadedTask.photos.allSatisfy { reloadedStore.previewImage(for: $0) != nil })
-    await reloadedStore.prepareDerivedImages(for: reloadedTask.photos)
-    XCTAssertTrue(reloadedTask.photos.allSatisfy { reloadedStore.thumbnailImage(for: $0) != nil })
-    XCTAssertTrue(reloadedTask.photos.allSatisfy { reloadedStore.previewImage(for: $0) != nil })
-    await reloadedStore.prepareCollageThumbnails(for: [reloadedTask])
+    await reloadedStore.preloadPersistedThumbnails(for: reloadedProject.photos)
+    XCTAssertTrue(reloadedProject.photos.allSatisfy { reloadedStore.thumbnailImage(for: $0) != nil })
+    XCTAssertTrue(reloadedProject.photos.allSatisfy { reloadedStore.previewImage(for: $0) != nil })
+    await reloadedStore.prepareDerivedImages(for: reloadedProject.photos)
+    XCTAssertTrue(reloadedProject.photos.allSatisfy { reloadedStore.thumbnailImage(for: $0) != nil })
+    XCTAssertTrue(reloadedProject.photos.allSatisfy { reloadedStore.previewImage(for: $0) != nil })
+    await reloadedStore.prepareProjectThumbnails(for: [reloadedProject])
     let reloadedThumbnail = try XCTUnwrap(
-      reloadedStore.collageThumbnailImage(for: reloadedTask)
+      reloadedStore.projectThumbnailImage(for: reloadedProject)
     )
     XCTAssertGreaterThan(reloadedThumbnail.size.width, 0)
     XCTAssertGreaterThan(reloadedThumbnail.size.height, 0)
   }
 
   @MainActor
-  func testStoreReloadPreservesImportedAssetsUntilTaskCommit() async throws {
+  func testStoreReloadPreservesImportedAssetsUntilProjectCommit() async throws {
     let directory = FileManager.default.temporaryDirectory
       .appendingPathComponent(
         "MixaFramePendingAssetTests-\(UUID().uuidString)", isDirectory: true)
@@ -641,25 +658,25 @@ final class LayoutEngineTests: XCTestCase {
   }
 
   func testGridProducesAFrameForEveryPhoto() {
-    var task = CollageTask.new(projectID: UUID())
-    task.photos = (0..<5).map { index in
+    var project = Project.new(collectionID: UUID())
+    project.photos = (0..<5).map { index in
       CollagePhoto(fileName: "\(index)", pixelWidth: 1200, pixelHeight: 800)
     }
 
-    let size = LayoutEngine.outputSize(for: task)
-    let frames = LayoutEngine.frames(for: task, in: size)
+    let size = LayoutEngine.outputSize(for: project)
+    let frames = LayoutEngine.frames(for: project, in: size)
 
-    XCTAssertEqual(frames.count, task.photos.count)
+    XCTAssertEqual(frames.count, project.photos.count)
     XCTAssertTrue(frames.allSatisfy { $0.minX >= 0 && $0.minY >= 0 })
     XCTAssertTrue(frames.allSatisfy { $0.maxX <= size.width + 0.5 && $0.maxY <= size.height + 0.5 })
   }
 
   func testCustomDividerWeightsResizeRowsAndColumnsAndPersist() throws {
-    var task = CollageTask.new(projectID: UUID())
-    task.photos = (0..<4).map { index in
+    var project = Project.new(collectionID: UUID())
+    project.photos = (0..<4).map { index in
       CollagePhoto(fileName: "photo-\(index)", pixelWidth: 1200, pixelHeight: 900)
     }
-    task.layoutID = try XCTUnwrap(
+    project.layoutID = try XCTUnwrap(
       LayoutCatalog.templates(photoCount: 4).first(where: {
         if case .adaptiveGrid(let rowCounts) = $0.recipe {
           return rowCounts == [2, 2]
@@ -667,20 +684,20 @@ final class LayoutEngineTests: XCTestCase {
         return false
       })
     ).id
-    task.spacing = 0
-    task.isPhotoOrderManuallyAdjusted = true
-    task.layoutRowWeights = [1.5, 0.5]
-    task.layoutColumnWeights = [[0.5, 1.5], [1, 1]]
+    project.spacing = 0
+    project.isPhotoOrderManuallyAdjusted = true
+    project.layoutRowWeights = [1.5, 0.5]
+    project.layoutColumnWeights = [[0.5, 1.5], [1, 1]]
 
     let size = CGSize(width: 1000, height: 1000)
-    let frames = LayoutEngine.layoutFrames(for: task, in: size)
+    let frames = LayoutEngine.layoutFrames(for: project, in: size)
     XCTAssertEqual(frames.count, 4)
     XCTAssertEqual(frames[0].rect.height, 750, accuracy: 0.5)
     XCTAssertEqual(frames[2].rect.height, 250, accuracy: 0.5)
     XCTAssertEqual(frames[0].rect.width, 250, accuracy: 0.5)
     XCTAssertEqual(frames[1].rect.width, 750, accuracy: 0.5)
 
-    let dividers = LayoutEngine.layoutDividers(for: task, in: size)
+    let dividers = LayoutEngine.layoutDividers(for: project, in: size)
     XCTAssertEqual(dividers.filter { $0.axis == .horizontal }.count, 1)
     XCTAssertEqual(dividers.filter { $0.axis == .vertical }.count, 2)
     let horizontalDivider = try XCTUnwrap(
@@ -689,37 +706,37 @@ final class LayoutEngineTests: XCTestCase {
     XCTAssertEqual(horizontalDivider.midpoint.y, 750, accuracy: 0.5)
 
     let decoded = try JSONDecoder().decode(
-      CollageTask.self,
-      from: JSONEncoder().encode(task)
+      Project.self,
+      from: JSONEncoder().encode(project)
     )
-    XCTAssertEqual(decoded.layoutRowWeights, task.layoutRowWeights)
-    XCTAssertEqual(decoded.layoutColumnWeights, task.layoutColumnWeights)
+    XCTAssertEqual(decoded.layoutRowWeights, project.layoutRowWeights)
+    XCTAssertEqual(decoded.layoutColumnWeights, project.layoutColumnWeights)
   }
 
   func testCustomDividerWeightsPreserveSlantedMosaicGeometry() throws {
-    var task = CollageTask.new(projectID: UUID())
-    task.photos = (0..<6).map { index in
+    var project = Project.new(collectionID: UUID())
+    project.photos = (0..<6).map { index in
       CollagePhoto(fileName: "photo-\(index)", pixelWidth: 1200, pixelHeight: 900)
     }
-    task.layoutID = try XCTUnwrap(
+    project.layoutID = try XCTUnwrap(
       LayoutCatalog.templates(photoCount: 6).first(where: { $0.family == .slanted })
     ).id
-    task.spacing = 0
-    task.isPhotoOrderManuallyAdjusted = true
+    project.spacing = 0
+    project.isPhotoOrderManuallyAdjusted = true
     let size = CGSize(width: 1000, height: 1000)
-    let defaultFrames = LayoutEngine.layoutFrames(for: task, in: size)
-    let adjustment = try XCTUnwrap(LayoutEngine.layoutAdjustmentGrid(for: task, in: size))
+    let defaultFrames = LayoutEngine.layoutFrames(for: project, in: size)
+    let adjustment = try XCTUnwrap(LayoutEngine.layoutAdjustmentGrid(for: project, in: size))
     XCTAssertEqual(adjustment.rowCounts, [3, 3])
 
-    task.layoutRowWeights = [0.7, 1.3]
-    task.layoutColumnWeights = [[1.5, 0.5, 1], [1, 1, 1]]
-    let adjustedFrames = LayoutEngine.layoutFrames(for: task, in: size)
+    project.layoutRowWeights = [0.7, 1.3]
+    project.layoutColumnWeights = [[1.5, 0.5, 1], [1, 1, 1]]
+    let adjustedFrames = LayoutEngine.layoutFrames(for: project, in: size)
     XCTAssertEqual(adjustedFrames.count, 6)
     XCTAssertTrue(adjustedFrames.allSatisfy { $0.normalizedClipPolygon?.count == 4 })
     XCTAssertGreaterThan(adjustedFrames[0].rect.width, defaultFrames[0].rect.width)
     XCTAssertLessThan(adjustedFrames[0].rect.height, defaultFrames[0].rect.height)
 
-    let dividers = LayoutEngine.layoutDividers(for: task, in: size)
+    let dividers = LayoutEngine.layoutDividers(for: project, in: size)
     XCTAssertEqual(dividers.count, 5)
     XCTAssertTrue(
       dividers.contains { divider in
@@ -733,22 +750,22 @@ final class LayoutEngineTests: XCTestCase {
 
   func testEveryMultiPhotoLayoutOffersAnAdjustableDivider() {
     for photoCount in 2...12 {
-      var task = CollageTask.new(projectID: UUID())
-      task.photos = (0..<photoCount).map { index in
+      var project = Project.new(collectionID: UUID())
+      project.photos = (0..<photoCount).map { index in
         CollagePhoto(
           fileName: "photo-\(index)",
           pixelWidth: index.isMultiple(of: 2) ? 1600 : 900,
           pixelHeight: index.isMultiple(of: 2) ? 900 : 1400
         )
       }
-      task.isPhotoOrderManuallyAdjusted = true
+      project.isPhotoOrderManuallyAdjusted = true
       for template in LayoutCatalog.templates(photoCount: photoCount) {
-        task.layoutID = template.id
-        task.layoutRowWeights = nil
-        task.layoutColumnWeights = nil
-        task.layoutFrameOverrides = nil
-        let size = LayoutEngine.outputSize(for: task)
-        let dividers = LayoutEngine.layoutDividers(for: task, in: size)
+        project.layoutID = template.id
+        project.layoutRowWeights = nil
+        project.layoutColumnWeights = nil
+        project.layoutFrameOverrides = nil
+        let size = LayoutEngine.outputSize(for: project)
+        let dividers = LayoutEngine.layoutDividers(for: project, in: size)
         if template.family == .flow {
           XCTAssertTrue(dividers.isEmpty, "Flow geometry should remain crop-free")
         } else {
@@ -766,23 +783,23 @@ final class LayoutEngineTests: XCTestCase {
     var testedLayoutCount = 0
 
     for photoCount in 3...12 {
-      var task = CollageTask.new(projectID: UUID())
-      task.photos = (0..<photoCount).map { index in
+      var project = Project.new(collectionID: UUID())
+      project.photos = (0..<photoCount).map { index in
         CollagePhoto(
           fileName: "partition-\(photoCount)-\(index)",
           pixelWidth: index.isMultiple(of: 2) ? 1600 : 1000,
           pixelHeight: index.isMultiple(of: 2) ? 1000 : 1400
         )
       }
-      task.spacing = 0
-      task.isPhotoOrderManuallyAdjusted = true
+      project.spacing = 0
+      project.isPhotoOrderManuallyAdjusted = true
 
       for template in LayoutCatalog.templates(photoCount: photoCount) {
         guard case .partition = template.recipe else { continue }
         testedLayoutCount += 1
-        task.layoutID = template.id
-        task.clearLayoutCustomization()
-        let frames = LayoutEngine.frames(for: task, in: size)
+        project.layoutID = template.id
+        project.clearLayoutCustomization()
+        let frames = LayoutEngine.frames(for: project, in: size)
 
         XCTAssertEqual(frames.count, photoCount, template.id)
         XCTAssertEqual(
@@ -807,53 +824,53 @@ final class LayoutEngineTests: XCTestCase {
             )
           }
         }
-        XCTAssertFalse(LayoutEngine.layoutDividers(for: task, in: size).isEmpty, template.id)
+        XCTAssertFalse(LayoutEngine.layoutDividers(for: project, in: size).isEmpty, template.id)
       }
     }
 
     XCTAssertGreaterThan(testedLayoutCount, 25)
   }
 
-  func testCustomCutsResizeAndPersistWithTask() throws {
-    var task = CollageTask.new(projectID: UUID())
-    task.photos = (0..<3).map {
+  func testCustomCutsResizeAndPersistWithProject() throws {
+    var project = Project.new(collectionID: UUID())
+    project.photos = (0..<3).map {
       CollagePhoto(fileName: "custom-\($0)", pixelWidth: 1200, pixelHeight: 900)
     }
-    task.spacing = 0
-    task.isPhotoOrderManuallyAdjusted = true
-    task.layoutID = LayoutCatalog.customTemplate(photoCount: 3).id
-    task.customLayoutFrames = [
+    project.spacing = 0
+    project.isPhotoOrderManuallyAdjusted = true
+    project.layoutID = LayoutCatalog.customTemplate(photoCount: 3).id
+    project.customLayoutFrames = [
       NormalizedLayoutFrame(x: 0, y: 0, width: 0.6, height: 1),
       NormalizedLayoutFrame(x: 0.6, y: 0, width: 0.4, height: 0.5),
       NormalizedLayoutFrame(x: 0.6, y: 0.5, width: 0.4, height: 0.5),
     ]
-    task.savedCustomLayoutID = UUID()
+    project.savedCustomLayoutID = UUID()
 
     let size = CGSize(width: 1000, height: 1000)
-    let frames = LayoutEngine.frames(for: task, in: size)
+    let frames = LayoutEngine.frames(for: project, in: size)
     XCTAssertEqual(frames[0], CGRect(x: 0, y: 0, width: 600, height: 1000))
     let divider = try XCTUnwrap(
-      LayoutEngine.layoutDividers(for: task, in: size).first(where: {
+      LayoutEngine.layoutDividers(for: project, in: size).first(where: {
         $0.axis == .vertical && $0.start.y < 1 && $0.end.y > 999
       })
     )
-    task.customLayoutFrames = try XCTUnwrap(
+    project.customLayoutFrames = try XCTUnwrap(
       LayoutEngine.adjustedCustomLayoutFrames(
-        for: task,
+        for: project,
         moving: divider,
         normalizedDelta: 0.1
       )
     )
-    let resized = LayoutEngine.frames(for: task, in: size)
+    let resized = LayoutEngine.frames(for: project, in: size)
     XCTAssertEqual(resized[0].width, 700, accuracy: 0.5)
     XCTAssertEqual(resized[1].minX, 700, accuracy: 0.5)
 
     let decoded = try JSONDecoder().decode(
-      CollageTask.self,
-      from: JSONEncoder().encode(task)
+      Project.self,
+      from: JSONEncoder().encode(project)
     )
-    XCTAssertEqual(decoded.customLayoutFrames, task.customLayoutFrames)
-    XCTAssertEqual(decoded.savedCustomLayoutID, task.savedCustomLayoutID)
+    XCTAssertEqual(decoded.customLayoutFrames, project.customLayoutFrames)
+    XCTAssertEqual(decoded.savedCustomLayoutID, project.savedCustomLayoutID)
   }
 
   @MainActor
@@ -898,28 +915,28 @@ final class LayoutEngineTests: XCTestCase {
   }
 
   func testIrregularLayoutDividerOverridesResizeAndPersist() throws {
-    var task = CollageTask.new(projectID: UUID())
-    task.photos = (0..<6).map { index in
+    var project = Project.new(collectionID: UUID())
+    project.photos = (0..<6).map { index in
       CollagePhoto(fileName: "photo-\(index)", pixelWidth: 1200, pixelHeight: 900)
     }
-    task.layoutID = try XCTUnwrap(
+    project.layoutID = try XCTUnwrap(
       LayoutCatalog.templates(photoCount: 6).first(where: { $0.family == .mosaic })
     ).id
-    task.spacing = 12
-    task.isPhotoOrderManuallyAdjusted = true
-    let size = LayoutEngine.outputSize(for: task)
-    let originalFrames = LayoutEngine.frames(for: task, in: size)
+    project.spacing = 12
+    project.isPhotoOrderManuallyAdjusted = true
+    let size = LayoutEngine.outputSize(for: project)
+    let originalFrames = LayoutEngine.frames(for: project, in: size)
     let divider = try XCTUnwrap(
-      LayoutEngine.layoutDividers(for: task, in: size).first(where: {
+      LayoutEngine.layoutDividers(for: project, in: size).first(where: {
         if case .frames = $0.adjustment { return true }
         return false
       })
     )
 
-    task.layoutFrameOverrides = try XCTUnwrap(
-      LayoutEngine.adjustedFrameOverrides(for: task, moving: divider, normalizedDelta: 0.06)
+    project.layoutFrameOverrides = try XCTUnwrap(
+      LayoutEngine.adjustedFrameOverrides(for: project, moving: divider, normalizedDelta: 0.06)
     )
-    let adjustedFrames = LayoutEngine.frames(for: task, in: size)
+    let adjustedFrames = LayoutEngine.frames(for: project, in: size)
     XCTAssertNotEqual(adjustedFrames, originalFrames)
     XCTAssertTrue(
       adjustedFrames.allSatisfy { frame in
@@ -928,18 +945,18 @@ final class LayoutEngineTests: XCTestCase {
       })
 
     let decoded = try JSONDecoder().decode(
-      CollageTask.self,
-      from: JSONEncoder().encode(task)
+      Project.self,
+      from: JSONEncoder().encode(project)
     )
-    XCTAssertEqual(decoded.layoutFrameOverrides, task.layoutFrameOverrides)
+    XCTAssertEqual(decoded.layoutFrameOverrides, project.layoutFrameOverrides)
   }
 
   func testSavedLayoutGeometrySurvivesDeletedCatalogTemplate() throws {
-    var task = CollageTask.new(projectID: UUID())
-    task.canvas = .portrait
-    task.spacing = 14
-    task.isPhotoOrderManuallyAdjusted = true
-    task.photos = (0..<6).map { index in
+    var project = Project.new(collectionID: UUID())
+    project.canvas = .portrait
+    project.spacing = 14
+    project.isPhotoOrderManuallyAdjusted = true
+    project.photos = (0..<6).map { index in
       CollagePhoto(
         fileName: "photo-\(index)",
         pixelWidth: index.isMultiple(of: 2) ? 1600 : 1000,
@@ -949,20 +966,20 @@ final class LayoutEngineTests: XCTestCase {
     let template = try XCTUnwrap(
       LayoutCatalog.templates(photoCount: 6).first(where: { $0.family == .slanted })
     )
-    task.layoutID = template.id
-    let originalSize = LayoutEngine.outputSize(for: task)
-    let originalFrames = LayoutEngine.layoutFrames(for: task, in: originalSize)
+    project.layoutID = template.id
+    let originalSize = LayoutEngine.outputSize(for: project)
+    let originalFrames = LayoutEngine.layoutFrames(for: project, in: originalSize)
     XCTAssertTrue(originalFrames.contains { $0.normalizedClipPolygon != nil })
 
-    var snapshot = try XCTUnwrap(LayoutEngine.savedLayoutSnapshot(for: task))
+    var snapshot = try XCTUnwrap(LayoutEngine.savedLayoutSnapshot(for: project))
     snapshot.sourceLayoutID = "n6-removed-from-future-catalog"
     snapshot.sourceLayoutTitle = "Saved Slanted Layout"
-    task.layoutID = snapshot.sourceLayoutID
-    task.savedLayoutSnapshot = snapshot
+    project.layoutID = snapshot.sourceLayoutID
+    project.savedLayoutSnapshot = snapshot
 
     let decoded = try JSONDecoder().decode(
-      CollageTask.self,
-      from: JSONEncoder().encode(task)
+      Project.self,
+      from: JSONEncoder().encode(project)
     )
     XCTAssertEqual(LayoutEngine.outputSize(for: decoded), originalSize)
     XCTAssertEqual(LayoutEngine.selectedTemplate(for: decoded).title, "Saved Slanted Layout")
@@ -986,10 +1003,10 @@ final class LayoutEngineTests: XCTestCase {
     )
   }
 
-  func testGridThumbnailUsesTheSameGeometryAsTheCollage() throws {
-    var task = CollageTask.new(projectID: UUID())
-    task.canvas = .landscape
-    task.photos = (0..<12).map { index in
+  func testGridThumbnailUsesTheSameGeometryAsTheProject() throws {
+    var project = Project.new(collectionID: UUID())
+    project.canvas = .landscape
+    project.photos = (0..<12).map { index in
       CollagePhoto(
         fileName: "landscape-\(index)",
         pixelWidth: index.isMultiple(of: 2) ? 1800 : 1500,
@@ -999,17 +1016,17 @@ final class LayoutEngineTests: XCTestCase {
     let template = try XCTUnwrap(
       LayoutCatalog.templates(photoCount: 12).first(where: { $0.family == .grid })
     )
-    task.layoutID = template.id
-    task.layoutRowWeights = [1.2, 0.8, 1]
-    task.layoutColumnWeights = [
+    project.layoutID = template.id
+    project.layoutRowWeights = [1.2, 0.8, 1]
+    project.layoutColumnWeights = [
       [1, 1, 1, 1], [1, 1, 1, 1], [1, 1, 1, 1],
     ]
-    let size = LayoutEngine.outputSize(for: task)
+    let size = LayoutEngine.outputSize(for: project)
 
-    let collageFrames = LayoutEngine.layoutFrames(for: task, in: size)
+    let collageFrames = LayoutEngine.layoutFrames(for: project, in: size)
     let thumbnailFrames = LayoutEngine.previewFrames(
       template: template,
-      task: task,
+      project: project,
       in: size,
       preservesCurrentAdjustments: true
     )
@@ -1018,29 +1035,29 @@ final class LayoutEngineTests: XCTestCase {
   }
 
   func testManualPhotoOrderPreservesPickerOrder() throws {
-    var task = CollageTask.new(projectID: UUID())
-    task.canvas = .portrait
-    task.photos = [
+    var project = Project.new(collectionID: UUID())
+    project.canvas = .portrait
+    project.photos = [
       CollagePhoto(fileName: "widest", pixelWidth: 2000, pixelHeight: 1000),
       CollagePhoto(fileName: "landscape-1", pixelWidth: 1500, pixelHeight: 1000),
       CollagePhoto(fileName: "landscape-2", pixelWidth: 1500, pixelHeight: 1000),
       CollagePhoto(fileName: "landscape-3", pixelWidth: 1500, pixelHeight: 1000),
       CollagePhoto(fileName: "landscape-4", pixelWidth: 1500, pixelHeight: 1000),
     ]
-    task.layoutID = try XCTUnwrap(
+    project.layoutID = try XCTUnwrap(
       LayoutCatalog.templates(photoCount: 5).first(where: { $0.family == .grid })
     ).id
-    task.isPhotoOrderManuallyAdjusted = true
+    project.isPhotoOrderManuallyAdjusted = true
 
-    let size = LayoutEngine.outputSize(for: task)
+    let size = LayoutEngine.outputSize(for: project)
 
-    XCTAssertEqual(LayoutEngine.photoIndicesInVisualOrder(for: task, in: size), Array(0..<5))
+    XCTAssertEqual(LayoutEngine.photoIndicesInVisualOrder(for: project, in: size), Array(0..<5))
   }
 
   func testResetPhotosForAutomaticFitRestoresDetectedFocusAndZoom() throws {
-    var task = CollageTask.new(projectID: UUID())
-    task.canvas = .portrait
-    task.photos = [
+    var project = Project.new(collectionID: UUID())
+    project.canvas = .portrait
+    project.photos = [
       CollagePhoto(
         fileName: "wide", pixelWidth: 2000, pixelHeight: 1000, focalX: 0.1, focalY: 0.9,
         focusSource: .manual,
@@ -1052,24 +1069,24 @@ final class LayoutEngineTests: XCTestCase {
         focusSource: .manual, zoom: 2
       ),
     ]
-    task.isPhotoOrderManuallyAdjusted = true
+    project.isPhotoOrderManuallyAdjusted = true
 
-    task.resetPhotosForAutomaticFit()
+    project.resetPhotosForAutomaticFit()
 
-    XCTAssertTrue(task.usesAutomaticPhotoArrangement)
-    XCTAssertEqual(task.photos[0].focalX, 0.7, accuracy: 0.0001)
-    XCTAssertEqual(task.photos[0].focalY, 0.4, accuracy: 0.0001)
-    XCTAssertEqual(task.photos[1].focalX, 0.5, accuracy: 0.0001)
-    XCTAssertEqual(task.photos[1].focalY, 0.5, accuracy: 0.0001)
-    XCTAssertTrue(task.photos.allSatisfy { $0.focusSource == .automatic })
-    XCTAssertTrue(task.photos.allSatisfy { $0.zoom == nil })
+    XCTAssertTrue(project.usesAutomaticPhotoArrangement)
+    XCTAssertEqual(project.photos[0].focalX, 0.7, accuracy: 0.0001)
+    XCTAssertEqual(project.photos[0].focalY, 0.4, accuracy: 0.0001)
+    XCTAssertEqual(project.photos[1].focalX, 0.5, accuracy: 0.0001)
+    XCTAssertEqual(project.photos[1].focalY, 0.5, accuracy: 0.0001)
+    XCTAssertTrue(project.photos.allSatisfy { $0.focusSource == .automatic })
+    XCTAssertTrue(project.photos.allSatisfy { $0.zoom == nil })
   }
 
   func testSwappingPhotosAutomaticallyRefitsBothCrops() throws {
     let firstID = UUID()
     let secondID = UUID()
-    var task = CollageTask.new(projectID: UUID())
-    task.photos = [
+    var project = Project.new(collectionID: UUID())
+    project.photos = [
       CollagePhoto(
         id: firstID,
         fileName: "first",
@@ -1094,16 +1111,16 @@ final class LayoutEngineTests: XCTestCase {
       ),
     ]
 
-    XCTAssertTrue(task.swapPhotosForAutomaticFit(sourceID: firstID, targetID: secondID))
+    XCTAssertTrue(project.swapPhotosForAutomaticFit(sourceID: firstID, targetID: secondID))
 
-    XCTAssertEqual(task.photos.map(\.id), [secondID, firstID])
-    XCTAssertEqual(task.photos[0].focalX, 0.3, accuracy: 0.0001)
-    XCTAssertEqual(task.photos[0].focalY, 0.6, accuracy: 0.0001)
-    XCTAssertEqual(task.photos[1].focalX, 0.7, accuracy: 0.0001)
-    XCTAssertEqual(task.photos[1].focalY, 0.4, accuracy: 0.0001)
-    XCTAssertTrue(task.photos.allSatisfy { $0.focusSource == .automatic })
-    XCTAssertTrue(task.photos.allSatisfy { $0.zoom == nil })
-    XCTAssertFalse(task.usesAutomaticPhotoArrangement)
+    XCTAssertEqual(project.photos.map(\.id), [secondID, firstID])
+    XCTAssertEqual(project.photos[0].focalX, 0.3, accuracy: 0.0001)
+    XCTAssertEqual(project.photos[0].focalY, 0.6, accuracy: 0.0001)
+    XCTAssertEqual(project.photos[1].focalX, 0.7, accuracy: 0.0001)
+    XCTAssertEqual(project.photos[1].focalY, 0.4, accuracy: 0.0001)
+    XCTAssertTrue(project.photos.allSatisfy { $0.focusSource == .automatic })
+    XCTAssertTrue(project.photos.allSatisfy { $0.zoom == nil })
+    XCTAssertFalse(project.usesAutomaticPhotoArrangement)
   }
 
   func testBestFitPlacementIsIndependentOfPickerOrder() throws {
@@ -1127,15 +1144,15 @@ final class LayoutEngineTests: XCTestCase {
     ]
 
     func placements(for photos: [CollagePhoto]) throws -> [UUID: CGRect] {
-      var task = CollageTask.new(projectID: UUID())
-      task.canvas = .portrait
-      task.photos = photos
-      task.layoutID = try XCTUnwrap(
+      var project = Project.new(collectionID: UUID())
+      project.canvas = .portrait
+      project.photos = photos
+      project.layoutID = try XCTUnwrap(
         LayoutCatalog.templates(photoCount: 5).first(where: { $0.family == .grid })
       ).id
-      let size = LayoutEngine.outputSize(for: task)
-      let frames = LayoutEngine.frames(for: task, in: size)
-      return Dictionary(uniqueKeysWithValues: zip(task.photos, frames).map { ($0.id, $1) })
+      let size = LayoutEngine.outputSize(for: project)
+      let frames = LayoutEngine.frames(for: project, in: size)
+      return Dictionary(uniqueKeysWithValues: zip(project.photos, frames).map { ($0.id, $1) })
     }
 
     let forward = try placements(for: photos)
@@ -1150,19 +1167,19 @@ final class LayoutEngineTests: XCTestCase {
   }
 
   func testBestFitPlacementAppliesToFeaturedLayouts() throws {
-    var task = CollageTask.new(projectID: UUID())
-    task.canvas = .landscape
-    task.photos = [
+    var project = Project.new(collectionID: UUID())
+    project.canvas = .landscape
+    project.photos = [
       CollagePhoto(fileName: "portrait", pixelWidth: 1200, pixelHeight: 2400),
       CollagePhoto(fileName: "square", pixelWidth: 1800, pixelHeight: 1800),
       CollagePhoto(fileName: "landscape", pixelWidth: 2400, pixelHeight: 1200),
     ]
-    task.layoutID = try XCTUnwrap(
+    project.layoutID = try XCTUnwrap(
       LayoutCatalog.templates(photoCount: 3).first(where: { $0.legacyLayout == .featuredTop })
     ).id
 
-    let size = LayoutEngine.outputSize(for: task)
-    let frames = LayoutEngine.frames(for: task, in: size)
+    let size = LayoutEngine.outputSize(for: project)
+    let frames = LayoutEngine.frames(for: project, in: size)
 
     XCTAssertEqual(frames[2].minY, 0, accuracy: 0.5)
     XCTAssertEqual(frames[2].width, size.width, accuracy: 0.5)
@@ -1188,16 +1205,16 @@ final class LayoutEngineTests: XCTestCase {
       XCTAssertFalse(patterns.isEmpty)
       XCTAssertTrue(patterns.allSatisfy { $0.reduce(0, +) == photoCount })
 
-      var task = CollageTask.new(projectID: UUID())
-      task.photos = (0..<photoCount).map {
+      var project = Project.new(collectionID: UUID())
+      project.photos = (0..<photoCount).map {
         CollagePhoto(fileName: "photo-\($0)", pixelWidth: 1200, pixelHeight: 900)
       }
-      task.spacing = 0
+      project.spacing = 0
       for template in LayoutCatalog.templates(photoCount: photoCount)
       where template.family == .grid {
-        task.layoutID = template.id
+        project.layoutID = template.id
         let size = CGSize(width: 1200, height: 1600)
-        let frames = LayoutEngine.frames(for: task, in: size)
+        let frames = LayoutEngine.frames(for: project, in: size)
         let rows = Dictionary(grouping: frames, by: { round($0.minY * 100) / 100 })
         XCTAssertEqual(frames.count, photoCount)
         for row in rows.values {
@@ -1208,9 +1225,9 @@ final class LayoutEngineTests: XCTestCase {
   }
 
   func testAdaptiveGridRetainsMostOfMixedAspectRatioPhotos() throws {
-    var task = CollageTask.new(projectID: UUID())
-    task.canvas = .square
-    task.photos = [
+    var project = Project.new(collectionID: UUID())
+    project.canvas = .square
+    project.photos = [
       CollagePhoto(fileName: "wide", pixelWidth: 2000, pixelHeight: 1000),
       CollagePhoto(fileName: "tall", pixelWidth: 1000, pixelHeight: 2000),
       CollagePhoto(fileName: "landscape", pixelWidth: 1500, pixelHeight: 1000),
@@ -1220,16 +1237,16 @@ final class LayoutEngineTests: XCTestCase {
       LayoutCatalog.templates(photoCount: 4).first(where: { $0.id == "n4-grid-rows-2-2" })
     )
 
-    let fit = LayoutEngine.photoFit(for: template, task: task)
+    let fit = LayoutEngine.photoFit(for: template, project: project)
 
     XCTAssertGreaterThan(fit.averageVisibleFraction, 0.8)
     XCTAssertGreaterThan(fit.minimumVisibleFraction, 0.8)
   }
 
   func testOfferedLayoutsMeetPhotoVisibilityGoalAndRecommendationIsBestFit() {
-    var task = CollageTask.new(projectID: UUID())
-    task.canvas = .landscape
-    task.photos = (0..<8).map { index in
+    var project = Project.new(collectionID: UUID())
+    project.canvas = .landscape
+    project.photos = (0..<8).map { index in
       CollagePhoto(
         fileName: "landscape-\(index)",
         pixelWidth: index.isMultiple(of: 3) ? 1800 : 1500,
@@ -1241,41 +1258,41 @@ final class LayoutEngineTests: XCTestCase {
     for family in LayoutFamily.browserCases {
       offeredLayouts += LayoutEngine.fittingLayoutSamples(
         family: family,
-        task: task,
+        project: project,
         mainPhotoCount: 1
       )
     }
 
     XCTAssertFalse(offeredLayouts.isEmpty)
     for template in offeredLayouts {
-      let fit = LayoutEngine.photoFit(for: template, task: task)
+      let fit = LayoutEngine.photoFit(for: template, project: project)
       XCTAssertGreaterThanOrEqual(fit.averageVisibleFraction, 0.68, template.title)
       XCTAssertGreaterThanOrEqual(fit.minimumVisibleFraction, 0.42, template.title)
     }
 
-    let recommendation = LayoutEngine.recommendedTemplate(for: task)
-    let recommendedFit = LayoutEngine.photoFit(for: recommendation, task: task)
+    let recommendation = LayoutEngine.recommendedTemplate(for: project)
+    let recommendedFit = LayoutEngine.photoFit(for: recommendation, project: project)
     XCTAssertGreaterThanOrEqual(recommendedFit.averageVisibleFraction, 0.68)
     XCTAssertGreaterThanOrEqual(recommendedFit.minimumVisibleFraction, 0.42)
     XCTAssertEqual(recommendation.family, .grid)
   }
 
   func testFittingLayoutSamplesStayStableWhenSelectionChanges() throws {
-    var task = CollageTask.new(projectID: UUID())
-    task.canvas = .square
-    task.photos = (0..<6).map {
+    var project = Project.new(collectionID: UUID())
+    project.canvas = .square
+    project.photos = (0..<6).map {
       CollagePhoto(fileName: "landscape-\($0)", pixelWidth: 1500, pixelHeight: 1000)
     }
     let gridTemplates = LayoutEngine.layoutSamples(family: .grid, photoCount: 6)
-    task.layoutID = try XCTUnwrap(gridTemplates.first).id
-    let expectedIDs = LayoutEngine.fittingLayoutSamples(family: .grid, task: task).map(\.id)
+    project.layoutID = try XCTUnwrap(gridTemplates.first).id
+    let expectedIDs = LayoutEngine.fittingLayoutSamples(family: .grid, project: project).map(\.id)
     XCTAssertFalse(expectedIDs.isEmpty)
 
-    let snapshotFrames = (0..<task.photos.count).map { index in
+    let snapshotFrames = (0..<project.photos.count).map { index in
       SavedLayoutFrame(
         rect: NormalizedLayoutFrame(
-          x: Double(index) / Double(task.photos.count), y: 0,
-          width: 1 / Double(task.photos.count), height: 1
+          x: Double(index) / Double(project.photos.count), y: 0,
+          width: 1 / Double(project.photos.count), height: 1
         ),
         clipPolygon: nil,
         cornerRadiusFraction: 0,
@@ -1286,19 +1303,19 @@ final class LayoutEngineTests: XCTestCase {
     }
 
     for template in gridTemplates {
-      var selectedTask = task
-      selectedTask.layoutID = template.id
-      selectedTask.savedLayoutSnapshot = SavedLayoutSnapshot(
+      var selectedProject = project
+      selectedProject.layoutID = template.id
+      selectedProject.savedLayoutSnapshot = SavedLayoutSnapshot(
         sourceLayoutID: template.id,
         sourceLayoutTitle: template.title,
         sourceLayoutFamily: template.family.rawValue,
-        photoCount: selectedTask.photos.count,
+        photoCount: selectedProject.photos.count,
         outputAspectRatio: 1,
         frames: snapshotFrames
       )
 
       XCTAssertEqual(
-        LayoutEngine.fittingLayoutSamples(family: .grid, task: selectedTask).map(\.id),
+        LayoutEngine.fittingLayoutSamples(family: .grid, project: selectedProject).map(\.id),
         expectedIDs,
         "Selecting \(template.title) should not change the offered Grid layouts"
       )
@@ -1306,15 +1323,15 @@ final class LayoutEngineTests: XCTestCase {
   }
 
   func testAutomaticRecommendationOptimizesCanvasAndLayoutTogether() {
-    var task = CollageTask.new(projectID: UUID())
-    task.canvas = .landscape
-    task.photos = (0..<2).map {
+    var project = Project.new(collectionID: UUID())
+    project.canvas = .landscape
+    project.photos = (0..<2).map {
       CollagePhoto(fileName: "landscape-\($0)", pixelWidth: 1500, pixelHeight: 1000)
     }
 
-    let recommendation = LayoutEngine.recommendedCanvasAndTemplate(for: task)
-    task.canvas = recommendation.canvas
-    let fit = LayoutEngine.photoFit(for: recommendation.template, task: task)
+    let recommendation = LayoutEngine.recommendedCanvasAndTemplate(for: project)
+    project.canvas = recommendation.canvas
+    let fit = LayoutEngine.photoFit(for: recommendation.template, project: project)
 
     XCTAssertNotEqual(recommendation.canvas, .landscape)
     XCTAssertGreaterThan(fit.averageVisibleFraction, 0.9)
@@ -1322,9 +1339,9 @@ final class LayoutEngineTests: XCTestCase {
   }
 
   func testSmartLayoutCategorySuggestsAtLeastThreeDistinctLayouts() {
-    var task = CollageTask.new(projectID: UUID())
-    task.canvas = .square
-    task.photos = [
+    var project = Project.new(collectionID: UUID())
+    project.canvas = .square
+    project.photos = [
       CollagePhoto(
         fileName: "wide-left", pixelWidth: 2200, pixelHeight: 1200,
         focalX: 0.2, focalY: 0.5,
@@ -1346,7 +1363,7 @@ final class LayoutEngineTests: XCTestCase {
       ),
     ]
 
-    let suggestions = LayoutEngine.fittingLayoutSamples(family: .smart, task: task)
+    let suggestions = LayoutEngine.fittingLayoutSamples(family: .smart, project: project)
 
     XCTAssertEqual(LayoutFamily.browserCases.first, .smart)
     XCTAssertGreaterThanOrEqual(suggestions.count, 3)
@@ -1355,7 +1372,7 @@ final class LayoutEngineTests: XCTestCase {
     XCTAssertFalse(suggestions.contains(where: { $0.family == .flow }))
     XCTAssertTrue(
       suggestions.allSatisfy { suggestion in
-        LayoutCatalog.templates(photoCount: task.photos.count).contains(where: {
+        LayoutCatalog.templates(photoCount: project.photos.count).contains(where: {
           $0.id == suggestion.id
         })
       }
@@ -1364,9 +1381,9 @@ final class LayoutEngineTests: XCTestCase {
 
   func testSmartLayoutAlwaysOffersAtLeastThreeChoicesForSupportedPhotoCounts() {
     for photoCount in 2...12 {
-      var task = CollageTask.new(projectID: UUID())
-      task.canvas = .square
-      task.photos = (0..<photoCount).map { index in
+      var project = Project.new(collectionID: UUID())
+      project.canvas = .square
+      project.photos = (0..<photoCount).map { index in
         CollagePhoto(
           fileName: "photo-\(index)",
           pixelWidth: index.isMultiple(of: 2) ? 1800 : 1100,
@@ -1374,7 +1391,7 @@ final class LayoutEngineTests: XCTestCase {
         )
       }
 
-      let suggestions = LayoutEngine.smartLayoutSamples(for: task)
+      let suggestions = LayoutEngine.smartLayoutSamples(for: project)
 
       XCTAssertGreaterThanOrEqual(
         suggestions.count,
@@ -1386,40 +1403,40 @@ final class LayoutEngineTests: XCTestCase {
   }
 
   func testAutomaticRecommendationUsesFirstSmartLayout() throws {
-    var task = CollageTask.new(projectID: UUID())
-    task.photos = [
+    var project = Project.new(collectionID: UUID())
+    project.photos = [
       CollagePhoto(fileName: "landscape", pixelWidth: 1800, pixelHeight: 1200),
       CollagePhoto(fileName: "portrait", pixelWidth: 1000, pixelHeight: 1600),
       CollagePhoto(fileName: "square", pixelWidth: 1400, pixelHeight: 1400),
       CollagePhoto(fileName: "landscape-2", pixelWidth: 2000, pixelHeight: 1200),
     ]
 
-    let recommendation = LayoutEngine.recommendedCanvasAndTemplate(for: task)
-    task.canvas = recommendation.canvas
-    let firstSmartLayout = try XCTUnwrap(LayoutEngine.smartLayoutSamples(for: task).first)
+    let recommendation = LayoutEngine.recommendedCanvasAndTemplate(for: project)
+    project.canvas = recommendation.canvas
+    let firstSmartLayout = try XCTUnwrap(LayoutEngine.smartLayoutSamples(for: project).first)
 
     XCTAssertEqual(recommendation.template.id, firstSmartLayout.id)
   }
 
   func testAutomaticRecommendationPrefersCanvasCloserToSquareWhenFitIsCompetitive() {
-    var task = CollageTask.new(projectID: UUID())
-    task.photos = [
+    var project = Project.new(collectionID: UUID())
+    project.photos = [
       CollagePhoto(fileName: "landscape", pixelWidth: 1600, pixelHeight: 1200),
       CollagePhoto(fileName: "square", pixelWidth: 1200, pixelHeight: 1200),
       CollagePhoto(fileName: "portrait", pixelWidth: 1200, pixelHeight: 1600),
     ]
 
-    let recommendation = LayoutEngine.recommendedCanvasAndTemplate(for: task)
-    var recommendedTask = task
-    recommendedTask.canvas = recommendation.canvas
-    let recommendedFit = LayoutEngine.photoFit(for: recommendation.template, task: recommendedTask)
+    let recommendation = LayoutEngine.recommendedCanvasAndTemplate(for: project)
+    var recommendedProject = project
+    recommendedProject.canvas = recommendation.canvas
+    let recommendedFit = LayoutEngine.photoFit(for: recommendation.template, project: recommendedProject)
 
     let bestFitsByCanvas = CanvasPreset.allCases.map { canvas in
-      var candidateTask = task
-      candidateTask.canvas = canvas
-      let bestFit = LayoutCatalog.templates(photoCount: task.photos.count)
+      var candidateProject = project
+      candidateProject.canvas = canvas
+      let bestFit = LayoutCatalog.templates(photoCount: project.photos.count)
         .filter { $0.family != .flow }
-        .map { LayoutEngine.photoFit(for: $0, task: candidateTask) }
+        .map { LayoutEngine.photoFit(for: $0, project: candidateProject) }
         .max { $0.score < $1.score }!
       return (canvas, bestFit)
     }
@@ -1440,18 +1457,18 @@ final class LayoutEngineTests: XCTestCase {
   }
 
   func testEveryLayoutProducesValidFrames() {
-    var task = CollageTask.new(projectID: UUID())
-    task.outputMaxDimension = 1920
-    task.photos = (0..<7).map { index in
+    var project = Project.new(collectionID: UUID())
+    project.outputMaxDimension = 1920
+    project.photos = (0..<7).map { index in
       CollagePhoto(fileName: "photo-\(index)", pixelWidth: 1200, pixelHeight: 900)
     }
 
     for layout in CollageLayout.allCases {
-      task.layout = layout
-      let size = LayoutEngine.outputSize(for: task)
-      let frames = LayoutEngine.frames(for: task, in: size)
+      project.layout = layout
+      let size = LayoutEngine.outputSize(for: project)
+      let frames = LayoutEngine.frames(for: project, in: size)
 
-      XCTAssertEqual(frames.count, task.photos.count, "Wrong frame count for \(layout.title)")
+      XCTAssertEqual(frames.count, project.photos.count, "Wrong frame count for \(layout.title)")
       XCTAssertTrue(
         frames.allSatisfy { $0.width > 0 && $0.height > 0 }, "Empty frame in \(layout.title)")
       XCTAssertTrue(
@@ -1574,8 +1591,8 @@ final class LayoutEngineTests: XCTestCase {
       }
       let expectedCount = photoCount == 2 ? 4 : (photoCount == 3 ? 6 : 9)
       XCTAssertEqual(layouts.filter { $0.family == .slanted }.count, expectedCount)
-      var task = CollageTask.new(projectID: UUID())
-      task.photos = (0..<photoCount).map {
+      var project = Project.new(collectionID: UUID())
+      project.photos = (0..<photoCount).map {
         CollagePhoto(fileName: "photo-\($0)", pixelWidth: 1200, pixelHeight: 900)
       }
       let slantedLayouts = layouts.filter { $0.family == .slanted }
@@ -1595,9 +1612,9 @@ final class LayoutEngineTests: XCTestCase {
             "Slanted mosaics should avoid single-photo rows when pairs are possible"
           )
         }
-        task.layoutID = layout.id
+        project.layoutID = layout.id
         let frames = LayoutEngine.layoutFrames(
-          for: task,
+          for: project,
           in: CGSize(width: 1200, height: 1600)
         )
         XCTAssertEqual(frames.count, photoCount)
@@ -1651,35 +1668,35 @@ final class LayoutEngineTests: XCTestCase {
       XCTAssertEqual(editorialStructures.count, editorialLayouts.count)
 
       if photoCount >= 3 {
-        var migratedTask = CollageTask.new(projectID: UUID())
-        migratedTask.photos = (0..<photoCount).map { index in
+        var migratedProject = Project.new(collectionID: UUID())
+        migratedProject.photos = (0..<photoCount).map { index in
           CollagePhoto(fileName: "photo-\(index)", pixelWidth: 1200, pixelHeight: 900)
         }
-        migratedTask.layoutID = "n\(photoCount)-editorial-right-main-2"
-        XCTAssertEqual(LayoutEngine.mainPhotoCount(for: migratedTask), 2)
-        XCTAssertEqual(LayoutEngine.selectedTemplate(for: migratedTask).family, .hero)
+        migratedProject.layoutID = "n\(photoCount)-editorial-right-main-2"
+        XCTAssertEqual(LayoutEngine.mainPhotoCount(for: migratedProject), 2)
+        XCTAssertEqual(LayoutEngine.selectedTemplate(for: migratedProject).family, .hero)
       }
     }
   }
 
   func testEveryHeroAndEditorialTemplateCanChangeMainPhotoCount() throws {
     for photoCount in 2...12 {
-      var task = CollageTask.new(projectID: UUID())
-      task.photos = (0..<photoCount).map { index in
+      var project = Project.new(collectionID: UUID())
+      project.photos = (0..<photoCount).map { index in
         CollagePhoto(fileName: "photo-\(index)", pixelWidth: 1200, pixelHeight: 900)
       }
-      task.isPhotoOrderManuallyAdjusted = true
-      task.spacing = 0
+      project.isPhotoOrderManuallyAdjusted = true
+      project.spacing = 0
       let maximumMainCount = min(3, photoCount - 1)
       let templates = LayoutCatalog.templates(photoCount: photoCount).filter {
         $0.family == .hero || $0.family == .editorial
       }
 
       for template in templates {
-        task.layoutID = template.id
+        project.layoutID = template.id
         for mainCount in 1...maximumMainCount {
-          task.mainPhotoCount = mainCount
-          let resolvedTemplate = LayoutEngine.selectedTemplate(for: task)
+          project.mainPhotoCount = mainCount
+          let resolvedTemplate = LayoutEngine.selectedTemplate(for: project)
           switch resolvedTemplate.recipe {
           case .multiHero(_, let resolvedMainCount, _):
             XCTAssertEqual(
@@ -1704,7 +1721,7 @@ final class LayoutEngineTests: XCTestCase {
             XCTFail("\(template.id) does not expose an adjustable main-photo recipe")
           }
           XCTAssertEqual(
-            LayoutEngine.layoutFrames(for: task, in: CGSize(width: 1200, height: 1200)).count,
+            LayoutEngine.layoutFrames(for: project, in: CGSize(width: 1200, height: 1200)).count,
             photoCount
           )
         }
@@ -1748,11 +1765,11 @@ final class LayoutEngineTests: XCTestCase {
 
   func testFeaturedBrowserShowsEveryMainCountWithoutDuplicateGeometry() {
     for photoCount in 2...12 {
-      var task = CollageTask.new(projectID: UUID())
-      task.canvas = .square
-      task.spacing = 0
-      task.isPhotoOrderManuallyAdjusted = true
-      task.photos = (0..<photoCount).map { index in
+      var project = Project.new(collectionID: UUID())
+      project.canvas = .square
+      project.spacing = 0
+      project.isPhotoOrderManuallyAdjusted = true
+      project.photos = (0..<photoCount).map { index in
         CollagePhoto(
           fileName: "photo-\(index)",
           pixelWidth: index.isMultiple(of: 2) ? 1600 : 1000,
@@ -1760,7 +1777,7 @@ final class LayoutEngineTests: XCTestCase {
         )
       }
 
-      let layouts = LayoutEngine.fittingLayoutSamples(family: .hero, task: task)
+      let layouts = LayoutEngine.fittingLayoutSamples(family: .hero, project: project)
       XCTAssertEqual(
         Set(layouts.compactMap(LayoutEngine.mainPhotoCount(for:))),
         Set(1...min(3, photoCount - 1))
@@ -1768,10 +1785,10 @@ final class LayoutEngineTests: XCTestCase {
 
       var geometryKeys: Set<String> = []
       for template in layouts {
-        task.layoutID = template.id
-        task.mainPhotoCount = LayoutEngine.mainPhotoCount(for: template)
-        let size = LayoutEngine.outputSize(for: task)
-        let frameKeys = LayoutEngine.layoutFrames(for: task, in: size).map { frame in
+        project.layoutID = template.id
+        project.mainPhotoCount = LayoutEngine.mainPhotoCount(for: template)
+        let size = LayoutEngine.outputSize(for: project)
+        let frameKeys = LayoutEngine.layoutFrames(for: project, in: size).map { frame in
           let values = [
             frame.rect.minX / size.width,
             frame.rect.minY / size.height,
@@ -1791,9 +1808,9 @@ final class LayoutEngineTests: XCTestCase {
 
   func testEveryCatalogLayoutProducesValidFrames() {
     for photoCount in 1...12 {
-      var task = CollageTask.new(projectID: UUID())
-      task.outputMaxDimension = 1024
-      task.photos = (0..<photoCount).map { index in
+      var project = Project.new(collectionID: UUID())
+      project.outputMaxDimension = 1024
+      project.photos = (0..<photoCount).map { index in
         CollagePhoto(
           fileName: "photo-\(index)",
           pixelWidth: index.isMultiple(of: 2) ? 1200 : 900,
@@ -1802,9 +1819,9 @@ final class LayoutEngineTests: XCTestCase {
       }
 
       for layout in LayoutCatalog.templates(photoCount: photoCount) {
-        task.layoutID = layout.id
-        let size = LayoutEngine.outputSize(for: task)
-        let frames = LayoutEngine.layoutFrames(for: task, in: size)
+        project.layoutID = layout.id
+        let size = LayoutEngine.outputSize(for: project)
+        let frames = LayoutEngine.layoutFrames(for: project, in: size)
 
         XCTAssertEqual(
           frames.count,
@@ -1830,21 +1847,21 @@ final class LayoutEngineTests: XCTestCase {
   }
 
   func testLayoutSelectionPersistsThroughCoding() throws {
-    var task = CollageTask.new(projectID: UUID())
-    task.photos = (0..<6).map {
+    var project = Project.new(collectionID: UUID())
+    project.photos = (0..<6).map {
       CollagePhoto(fileName: "photo-\($0)", pixelWidth: 1200, pixelHeight: 900)
     }
-    task.layoutID = try XCTUnwrap(
+    project.layoutID = try XCTUnwrap(
       LayoutCatalog.templates(photoCount: 6).first(where: { $0.family == .mosaic })
     ).id
-    task.canvasCornerRadius = 14
+    project.canvasCornerRadius = 14
 
-    let encoded = try JSONEncoder().encode(task)
-    let decoded = try JSONDecoder().decode(CollageTask.self, from: encoded)
+    let encoded = try JSONEncoder().encode(project)
+    let decoded = try JSONDecoder().decode(Project.self, from: encoded)
 
-    XCTAssertEqual(decoded.layoutID, task.layoutID)
+    XCTAssertEqual(decoded.layoutID, project.layoutID)
     XCTAssertEqual(decoded.canvasCornerRadius, 14)
-    XCTAssertEqual(LayoutEngine.selectedTemplate(for: decoded).id, task.layoutID)
+    XCTAssertEqual(LayoutEngine.selectedTemplate(for: decoded).id, project.layoutID)
   }
 
   func testCanvasCornersAreAppliedToTheRenderedCanvas() throws {
@@ -1862,16 +1879,16 @@ final class LayoutEngineTests: XCTestCase {
       try XCTUnwrap(image.pngData()).write(to: directory.appendingPathComponent(name))
     }
 
-    var task = CollageTask.new(projectID: UUID())
-    task.outputMaxDimension = 512
-    task.outputFormat = .png
-    task.canvasCornerRadius = 50
-    task.spacing = 0
-    task.photos = sourceNames.map {
+    var project = Project.new(collectionID: UUID())
+    project.outputMaxDimension = 512
+    project.outputFormat = .png
+    project.canvasCornerRadius = 50
+    project.spacing = 0
+    project.photos = sourceNames.map {
       CollagePhoto(fileName: $0, pixelWidth: 100, pixelHeight: 100)
     }
 
-    let rendered = try CollageRenderer.render(task: task, photoDirectory: directory)
+    let rendered = try CollageRenderer.render(project: project, photoDirectory: directory)
     XCTAssertLessThan(alphaValue(in: rendered, at: .zero), 0.05)
     XCTAssertGreaterThan(alphaValue(in: rendered, at: CGPoint(x: 256, y: 256)), 0.95)
   }
@@ -1891,15 +1908,15 @@ final class LayoutEngineTests: XCTestCase {
       try XCTUnwrap(image.pngData()).write(to: directory.appendingPathComponent(name))
     }
 
-    var task = CollageTask.new(projectID: UUID())
-    task.outputMaxDimension = 512
-    task.photos = sourceNames.map {
+    var project = Project.new(collectionID: UUID())
+    project.outputMaxDimension = 512
+    project.photos = sourceNames.map {
       CollagePhoto(fileName: $0, pixelWidth: 160, pixelHeight: 100)
     }
 
     for format in OutputFormat.allCases {
-      task.outputFormat = format
-      let result = try CollageRenderer.export(task: task, photoDirectory: directory)
+      project.outputFormat = format
+      let result = try CollageRenderer.export(project: project, photoDirectory: directory)
       XCTAssertTrue(
         FileManager.default.fileExists(atPath: result.path), "Missing \(format.title) export")
       XCTAssertGreaterThan(try Data(contentsOf: result).count, 100)
@@ -1922,23 +1939,23 @@ final class LayoutEngineTests: XCTestCase {
       try XCTUnwrap(image.pngData()).write(to: directory.appendingPathComponent(name))
     }
 
-    var task = CollageTask.new(projectID: UUID())
-    task.outputMaxDimension = 512
-    task.outputFormat = .png
-    task.photos = sourceNames.map {
+    var project = Project.new(collectionID: UUID())
+    project.outputMaxDimension = 512
+    project.outputFormat = .png
+    project.photos = sourceNames.map {
       CollagePhoto(fileName: $0, pixelWidth: 160, pixelHeight: 100)
     }
 
-    let premiumImage = try CollageRenderer.render(task: task, photoDirectory: directory)
+    let premiumImage = try CollageRenderer.render(project: project, photoDirectory: directory)
     let freeImage = try CollageRenderer.render(
-      task: task,
+      project: project,
       photoDirectory: directory,
       includesWatermark: true
     )
     XCTAssertNotEqual(premiumImage.pngData(), freeImage.pngData())
 
     let export = try CollageRenderer.prepareExport(
-      task: task,
+      project: project,
       photoDirectory: directory,
       includesWatermark: true
     )
@@ -1982,13 +1999,13 @@ final class LayoutEngineTests: XCTestCase {
         to: directory.appendingPathComponent(name))
     }
 
-    var task = CollageTask.new(projectID: UUID())
-    task.canvas = .landscape
-    task.outputMaxDimension = 4096
-    task.photos = sourceNames.map {
+    var project = Project.new(collectionID: UUID())
+    project.canvas = .landscape
+    project.outputMaxDimension = 4096
+    project.photos = sourceNames.map {
       CollagePhoto(fileName: $0, pixelWidth: 320, pixelHeight: 200)
     }
-    let export = try CollageRenderer.prepareExport(task: task, photoDirectory: directory)
+    let export = try CollageRenderer.prepareExport(project: project, photoDirectory: directory)
     defer { try? FileManager.default.removeItem(at: export.fileURL) }
 
     XCTAssertEqual(export.outputSize.width, 4096)

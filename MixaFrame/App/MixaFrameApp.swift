@@ -8,7 +8,7 @@ struct MixaFrameApp: App {
 
   var body: some Scene {
     WindowGroup {
-      ProjectListView()
+      CollectionListView()
         .environmentObject(store)
         .environmentObject(subscriptions)
         .tint(.indigo)
