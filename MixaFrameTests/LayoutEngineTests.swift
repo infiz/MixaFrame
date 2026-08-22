@@ -301,7 +301,7 @@ final class LayoutEngineTests: XCTestCase {
           year: 2026, month: 8, day: 14, hour: 16, minute: 5, second: 9)))
     let localTimeZone = try XCTUnwrap(TimeZone(secondsFromGMT: -7 * 60 * 60))
 
-    let name = CollageRenderer.exportFileName(
+    let name = CollageExportFileName.make(
       collectionName: "Summer Trip",
       projectName: "Beach Day",
       format: .jpeg,
@@ -311,7 +311,7 @@ final class LayoutEngineTests: XCTestCase {
 
     XCTAssertEqual(name, "20260814-090509-Summer-Trip-Beach-Day.jpg")
 
-    let sanitized = CollageRenderer.exportFileName(
+    let sanitized = CollageExportFileName.make(
       collectionName: "Family / Summer: 2026",
       projectName: "Kids?*<>|\" 😀",
       format: .png,
@@ -320,7 +320,7 @@ final class LayoutEngineTests: XCTestCase {
     )
     XCTAssertEqual(sanitized, "20260814-090509-Family-Summer-2026-Kids.png")
 
-    let bounded = CollageRenderer.exportFileName(
+    let bounded = CollageExportFileName.make(
       collectionName: String(repeating: "é", count: 200),
       projectName: String(repeating: "Album", count: 100),
       format: .webP,

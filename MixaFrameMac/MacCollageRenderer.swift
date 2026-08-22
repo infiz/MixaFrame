@@ -1,5 +1,6 @@
 import AppKit
 import CoreGraphics
+import CoreText
 import Foundation
 import ImageIO
 import SDWebImageWebPCoder
@@ -9,7 +10,8 @@ enum MacCollageRenderer {
   static func export(
     project: Project,
     photoDirectory: URL,
-    destination: URL
+    destination: URL,
+    includesWatermark: Bool = false
   ) throws {
     guard project.photos.count >= 2 else { throw MacCollageRenderError.notEnoughPhotos }
     let requestedSize = LayoutEngine.outputSize(for: project)
@@ -65,6 +67,9 @@ enum MacCollageRenderer {
         throw MacCollageRenderError.missingPhoto
       }
       draw(photo: photo, image: image, frame: frame, in: context)
+    }
+    if includesWatermark {
+      drawWatermark(in: canvas, context: context)
     }
     context.restoreGState()
 
@@ -190,6 +195,105 @@ enum MacCollageRenderer {
       width: max(1, floor(requested.width * scale)),
       height: max(1, floor(requested.height * scale))
     )
+  }
+
+  private static func drawWatermark(in canvasRect: CGRect, context: CGContext) {
+    context.saveGState()
+    defer { context.restoreGState() }
+
+    let fontSize = max(18, min(canvasRect.width, canvasRect.height) * 0.04)
+    let brandFont =
+      NSFont(name: "AvenirNext-DemiBold", size: fontSize)
+      ?? NSFont.systemFont(ofSize: fontSize, weight: .bold)
+    let captionFontSize = max(6, fontSize * 0.3)
+    let captionFont = NSFont.systemFont(ofSize: captionFontSize, weight: .bold)
+    let brandLine = CTLineCreateWithAttributedString(
+      NSAttributedString(
+        string: "MixaFrame",
+        attributes: [
+          .font: brandFont,
+          .foregroundColor: NSColor.white,
+          .kern: fontSize * 0.018,
+        ]
+      )
+    )
+    let captionLine = CTLineCreateWithAttributedString(
+      NSAttributedString(
+        string: "CREATED WITH",
+        attributes: [
+          .font: captionFont,
+          .foregroundColor: NSColor.white.withAlphaComponent(0.82),
+          .kern: captionFontSize * 0.14,
+        ]
+      )
+    )
+
+    var brandAscent: CGFloat = 0
+    var brandDescent: CGFloat = 0
+    var captionAscent: CGFloat = 0
+    var captionDescent: CGFloat = 0
+    let brandWidth = CGFloat(
+      CTLineGetTypographicBounds(brandLine, &brandAscent, &brandDescent, nil))
+    let captionWidth = CGFloat(
+      CTLineGetTypographicBounds(captionLine, &captionAscent, &captionDescent, nil))
+    let brandHeight = brandAscent + brandDescent
+    let captionHeight = captionAscent + captionDescent
+    let horizontalPadding = fontSize * 0.78
+    let verticalPadding = fontSize * 0.38
+    let lineSpacing = fontSize * 0.08
+    let margin = max(fontSize * 0.72, min(canvasRect.width, canvasRect.height) * 0.025)
+    let contentWidth = max(brandWidth, captionWidth)
+    let contentHeight = captionHeight + lineSpacing + brandHeight
+    let backgroundSize = CGSize(
+      width: contentWidth + horizontalPadding * 2,
+      height: contentHeight + verticalPadding * 2
+    )
+    let backgroundRect = CGRect(
+      x: canvasRect.maxX - backgroundSize.width - margin,
+      y: canvasRect.minY + margin,
+      width: backgroundSize.width,
+      height: backgroundSize.height
+    )
+
+    context.addPath(
+      CGPath(
+        roundedRect: backgroundRect,
+        cornerWidth: backgroundRect.height / 2,
+        cornerHeight: backgroundRect.height / 2,
+        transform: nil
+      ))
+    context.setFillColor(NSColor.black.withAlphaComponent(0.68).cgColor)
+    context.fillPath()
+    context.addPath(
+      CGPath(
+        roundedRect: backgroundRect,
+        cornerWidth: backgroundRect.height / 2,
+        cornerHeight: backgroundRect.height / 2,
+        transform: nil
+      ))
+    context.setStrokeColor(NSColor.white.withAlphaComponent(0.22).cgColor)
+    context.setLineWidth(max(1, fontSize * 0.025))
+    context.strokePath()
+
+    let contentBottom = backgroundRect.midY - contentHeight / 2
+    let brandBaseline = contentBottom + brandDescent
+    let captionBaseline = contentBottom + brandHeight + lineSpacing + captionDescent
+    context.textPosition = CGPoint(
+      x: backgroundRect.midX - brandWidth / 2,
+      y: brandBaseline
+    )
+    context.setShadow(
+      offset: CGSize(width: 0, height: -fontSize * 0.06),
+      blur: fontSize * 0.12,
+      color: NSColor.black.withAlphaComponent(0.45).cgColor
+    )
+    CTLineDraw(brandLine, context)
+    context.setShadow(offset: .zero, blur: 0, color: nil)
+    context.textPosition = CGPoint(
+      x: backgroundRect.midX - captionWidth / 2,
+      y: captionBaseline
+    )
+    CTLineDraw(captionLine, context)
   }
 
   private static func destinationType(for format: OutputFormat) -> String? {
