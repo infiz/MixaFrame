@@ -8,7 +8,9 @@ struct ProjectEditorView: View {
   @EnvironmentObject private var store: AppStore
   @EnvironmentObject private var subscriptions: SubscriptionStore
   @Environment(\.dismiss) private var dismiss
-  @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+  @Environment(\.undoManager) private var undoManager
+  @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+  @StateObject private var undoHistory = ProjectUndoHistory()
   @State private var draft: Project
   @State private var savedSnapshot: Project
   @State private var pickerItems: [PhotosPickerItem] = []
@@ -32,15 +34,26 @@ struct ProjectEditorView: View {
   @State private var pendingExitAction: PendingExitAction?
   @State private var isPhotoExportChoicePresented = false
   @State private var pendingPhotoLibraryExportMode: PhotoLibraryExportMode?
+  @State private var recoverableDraft: RecoverableProjectDraft?
+  @State private var draftCheckpointTask: Task<Void, Never>?
+  @State private var exitsAfterSuccessfulExport = false
+  @State private var completedMeaningfulWork = false
+  private let shouldPromptForRecovery: Bool
 
-  init(collectionID: UUID, project: Project?) {
+  init(
+    collectionID: UUID,
+    project: Project?,
+    savedProject: Project? = nil,
+    isRecoveredDraft: Bool = false
+  ) {
     let initialProject = Self.initialDraft(collectionID: collectionID, project: project)
     _draft = State(initialValue: initialProject)
-    _savedSnapshot = State(initialValue: initialProject)
-    _isControlsHidden = State(initialValue: project != nil)
+    _savedSnapshot = State(initialValue: savedProject ?? initialProject)
+    _isControlsHidden = State(initialValue: project != nil && !isRecoveredDraft)
     _activeEditorTool = State(initialValue: .photos)
     _selectedLayoutFamily = State(
       initialValue: LayoutEngine.selectedTemplate(for: initialProject).family.browserFamily)
+    shouldPromptForRecovery = !isRecoveredDraft
   }
 
   static func initialDraft(
@@ -60,6 +73,40 @@ struct ProjectEditorView: View {
 
   var body: some View {
     editorContent
+      .onAppear {
+        undoHistory.connect(undoManager: undoManager) { recoveredProject in
+          draft = recoveredProject
+          selectedLayoutFamily = LayoutEngine.selectedTemplate(for: recoveredProject).family.browserFamily
+        }
+        if shouldPromptForRecovery {
+          Task { await presentRecoveryIfNeeded() }
+        }
+      }
+      .onChange(of: draft) { previous, current in
+        undoHistory.record(previous: previous, current: current)
+        scheduleDraftCheckpoint(current)
+      }
+      .onDisappear { draftCheckpointTask?.cancel() }
+      .alert(item: $recoverableDraft) { recovery in
+        Alert(
+          title: Text("Recover Unsaved Changes?"),
+          message: Text("MixaFrame found a recovery copy from \(recovery.savedAt.formatted(date: .abbreviated, time: .shortened))."),
+          primaryButton: .default(Text("Recover")) {
+            undoHistory.reset()
+            draft = recovery.project
+            selectedLayoutFamily = LayoutEngine.selectedTemplate(for: recovery.project).family.browserFamily
+            isControlsHidden = false
+          },
+          secondaryButton: .destructive(Text("Discard")) {
+            Task {
+              await store.discardDraft(
+                projectID: recovery.id,
+                removesUncommittedAssets: true
+              )
+            }
+          }
+        )
+      }
       .sheet(isPresented: $isExitConfirmationPresented, onDismiss: completeExitAction) {
         unsavedChangesSheet
       }
@@ -79,7 +126,7 @@ struct ProjectEditorView: View {
               isPhotoExportChoicePresented = false
             }
           )
-          .presentationDetents([.medium])
+          .presentationDetents(dynamicTypeSize.isAccessibilitySize ? [.large] : [.medium, .large])
           .presentationDragIndicator(.visible)
         }
       }
@@ -87,58 +134,65 @@ struct ProjectEditorView: View {
 
   private var unsavedChangesSheet: some View {
     NavigationStack {
-      VStack(alignment: .leading, spacing: 14) {
-        if draft.photos.count >= 2 {
-          Button {
-            chooseExitAction(.saveAndExport)
-          } label: {
-            Label("Save and Export", systemImage: "square.and.arrow.down")
-              .frame(maxWidth: .infinity)
-          }
-          .buttonStyle(.borderedProminent)
-          .controlSize(.large)
-        }
-
-        if !subscriptions.hasPremiumAccess {
-          Button {
-            chooseExitAction(.subscribe)
-          } label: {
-            HStack(spacing: 10) {
-              Label("Subscribe to remove the watermark", systemImage: "crown.fill")
-              Spacer(minLength: 8)
-              Image(systemName: "chevron.right")
-                .font(.caption.weight(.semibold))
+      ScrollView {
+        VStack(alignment: .leading, spacing: 14) {
+          if draft.photos.count >= 2 {
+            Button {
+              chooseExitAction(.saveAndExport)
+            } label: {
+              Label("Save and Export", systemImage: "square.and.arrow.down")
+                .frame(maxWidth: .infinity)
             }
-            .font(.subheadline.weight(.semibold))
-            .contentShape(Rectangle())
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
           }
-          .buttonStyle(.plain)
-          .foregroundStyle(.indigo)
-          .accessibilityHint("Opens MixaFrame Premium subscription options")
-        }
 
-        if draft.photos.count >= 2 {
-          Button {
-            chooseExitAction(.saveAndLeave)
+          if draft.photos.count >= 2 {
+            Button {
+              chooseExitAction(.saveAndLeave)
+            } label: {
+              Label("Save and Leave", systemImage: "rectangle.portrait.and.arrow.right")
+                .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.large)
+          }
+
+          Button(role: .destructive) {
+            chooseExitAction(.discard)
           } label: {
-            Label("Save and Leave", systemImage: "rectangle.portrait.and.arrow.right")
+            Label("Discard Changes", systemImage: "trash")
               .frame(maxWidth: .infinity)
           }
           .buttonStyle(.bordered)
           .controlSize(.large)
-        }
 
-        Button(role: .destructive) {
-          chooseExitAction(.discard)
-        } label: {
-          Label("Discard Changes", systemImage: "trash")
-            .frame(maxWidth: .infinity)
+          if !subscriptions.hasPremiumAccess {
+            Button {
+              chooseExitAction(.subscribe)
+            } label: {
+              HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "crown.fill")
+                  .dynamicTypeSize(...DynamicTypeSize.large)
+                  .accessibilityHidden(true)
+                Text("Subscribe to remove the watermark")
+                  .fixedSize(horizontal: false, vertical: true)
+                  .frame(maxWidth: .infinity, alignment: .leading)
+                Image(systemName: "chevron.right")
+                  .font(.caption.weight(.semibold))
+                  .dynamicTypeSize(...DynamicTypeSize.large)
+                  .accessibilityHidden(true)
+              }
+              .font(.subheadline.weight(.semibold))
+              .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.indigo)
+            .accessibilityHint("Opens MixaFrame Premium subscription options")
+          }
         }
-        .buttonStyle(.bordered)
-        .controlSize(.large)
+        .padding(20)
       }
-      .padding(20)
-      .frame(maxHeight: .infinity, alignment: .top)
       .navigationTitle("Unsaved Changes")
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
@@ -149,47 +203,84 @@ struct ProjectEditorView: View {
         }
       }
     }
-    .presentationDetents([.height(subscriptions.hasPremiumAccess ? 300 : 350)])
+    .presentationDetents(dynamicTypeSize.isAccessibilitySize
+      ? [.large] : [.height(subscriptions.hasPremiumAccess ? 300 : 350), .large])
     .presentationDragIndicator(.visible)
   }
 
   private var saveProjectSheet: some View {
     NavigationStack {
-      VStack(alignment: .leading, spacing: 14) {
-        Button {
-          isSaveChoicePresented = false
-          beginSaving(dismissAfterSave: false) {
-            performExportAction(.saveToPhotos)
+      ScrollView {
+        VStack(alignment: .leading, spacing: 14) {
+          Button {
+            isSaveChoicePresented = false
+            beginSaving(dismissAfterSave: false) {
+              performExportAction(.saveToPhotos)
+            }
+          } label: {
+            Label("Save and Export", systemImage: "square.and.arrow.down")
+              .frame(maxWidth: .infinity)
           }
-        } label: {
-          Label("Save and Export", systemImage: "square.and.arrow.down")
-            .frame(maxWidth: .infinity)
-        }
-        .buttonStyle(.borderedProminent)
-        .controlSize(.large)
+          .buttonStyle(.borderedProminent)
+          .controlSize(.large)
 
-        Button {
-          isSaveChoicePresented = false
-          beginSaving(dismissAfterSave: false)
-        } label: {
-          Label("Save and Keep Editing", systemImage: "square.and.pencil")
-            .frame(maxWidth: .infinity)
-        }
-        .buttonStyle(.bordered)
-        .controlSize(.large)
+          Button {
+            isSaveChoicePresented = false
+            beginSaving(dismissAfterSave: false)
+          } label: {
+            Label("Save and Keep Editing", systemImage: "square.and.pencil")
+              .frame(maxWidth: .infinity)
+          }
+          .buttonStyle(.bordered)
+          .controlSize(.large)
 
-        Button("Cancel", role: .cancel) {
-          isSaveChoicePresented = false
+          Button("Cancel", role: .cancel) {
+            isSaveChoicePresented = false
+          }
+          .frame(maxWidth: .infinity)
         }
-        .frame(maxWidth: .infinity)
+        .padding(20)
       }
-      .padding(20)
-      .frame(maxHeight: .infinity, alignment: .top)
       .navigationTitle("Save Project")
       .navigationBarTitleDisplayMode(.inline)
     }
-    .presentationDetents([.height(250)])
+    .presentationDetents(dynamicTypeSize.isAccessibilitySize ? [.large] : [.height(250), .large])
     .presentationDragIndicator(.visible)
+  }
+
+  private var renameProjectSheet: some View {
+    NavigationStack {
+      Form {
+        Section {
+          TextField("Project title", text: $pendingTitle, axis: .vertical)
+            .lineLimit(1...4)
+            .submitLabel(.done)
+            .onSubmit(applyProjectTitle)
+        } footer: {
+          Text("The title shown for this project.")
+        }
+      }
+      .navigationTitle("Project Title")
+      .navigationBarTitleDisplayMode(.inline)
+      .toolbar {
+        ToolbarItem(placement: .cancellationAction) {
+          Button("Cancel") { isRenamePresented = false }
+        }
+        ToolbarItem(placement: .confirmationAction) {
+          Button("Done", action: applyProjectTitle)
+            .disabled(pendingTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        }
+      }
+    }
+    .presentationDetents(dynamicTypeSize.isAccessibilitySize ? [.large] : [.medium, .large])
+    .presentationDragIndicator(.visible)
+  }
+
+  private func applyProjectTitle() {
+    let title = pendingTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !title.isEmpty else { return }
+    draft.name = title
+    isRenamePresented = false
   }
 
   private func chooseExitAction(_ action: PendingExitAction) {
@@ -202,6 +293,7 @@ struct ProjectEditorView: View {
     pendingExitAction = nil
     switch action {
     case .saveAndExport:
+      exitsAfterSuccessfulExport = true
       beginSaving(dismissAfterSave: false) {
         performExportAction(.saveToPhotos)
       }
@@ -210,6 +302,7 @@ struct ProjectEditorView: View {
     case .discard:
       let discardedDraft = draft
       Task {
+        await store.discardDraft(projectID: discardedDraft.id)
         await store.discardUnsavedProjectFiles(from: discardedDraft)
         dismiss()
       }
@@ -222,7 +315,7 @@ struct ProjectEditorView: View {
     NavigationStack {
       GeometryReader { proxy in
         let isLandscapeEditing =
-          !isControlsHidden && proxy.size.width > proxy.size.height
+          !isControlsHidden && workspaceLayout(for: proxy.size).usesSideBySide
         let workspaceWidth =
           isLandscapeEditing
           ? landscapePreviewWorkspaceWidth(for: proxy.size)
@@ -253,7 +346,7 @@ struct ProjectEditorView: View {
       .onChange(of: exportPreferenceSnapshot) { _, updatedPreferences in
         updatedPreferences.save()
       }
-      .navigationTitle(draft.name)
+      .navigationTitle(draft.displayName)
       .navigationBarTitleDisplayMode(.inline)
       .interactiveDismissDisabled(true)
       .toolbar {
@@ -264,7 +357,7 @@ struct ProjectEditorView: View {
               pendingExitAction = nil
               isExitConfirmationPresented = true
             } else {
-              dismiss()
+              finishEditing()
             }
           } label: {
             Label("Back", systemImage: "chevron.left")
@@ -277,7 +370,7 @@ struct ProjectEditorView: View {
             isRenamePresented = true
           } label: {
             HStack(spacing: 5) {
-              Text(draft.name)
+              Text(draft.displayName)
                 .font(.headline)
                 .lineLimit(1)
               Image(systemName: "pencil")
@@ -293,6 +386,7 @@ struct ProjectEditorView: View {
           Button("Save") {
             presentSaveChoices()
           }
+          .keyboardShortcut("s", modifiers: .command)
           .disabled(draft.photos.count < 2 || isSaving || isExporting)
         }
         ToolbarItemGroup(placement: .keyboard) {
@@ -371,18 +465,8 @@ struct ProjectEditorView: View {
         }
         .ignoresSafeArea()
       }
-      .alert("Edit Project Title", isPresented: $isRenamePresented) {
-        TextField("Project title", text: $pendingTitle)
-        Button("Cancel", role: .cancel) {}
-        Button("Done") {
-          let title = pendingTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-          if !title.isEmpty {
-            draft.name = title
-          }
-        }
-        .disabled(pendingTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-      } message: {
-        Text("Enter the title shown for this project.")
+      .sheet(isPresented: $isRenamePresented) {
+        renameProjectSheet
       }
       .alert(item: $message) { message in
         Alert(
@@ -428,33 +512,14 @@ struct ProjectEditorView: View {
 
   @ViewBuilder
   private func editorControls(availableSize: CGSize) -> some View {
-    let isLandscape = availableSize.width > availableSize.height
-    let panelWidth =
-      usesExpandedLayout
-      ? max(1, availableSize.width - 32)
-      : min(680, max(1, availableSize.width - 16))
-    let defaultControlsHeight = availableSize.height * 0.5 - 8
-    let availableControlsHeight =
-      availableSize.height
-      - previewMaximumHeight(for: availableSize)
-      - editorPortraitReservedVerticalSpace
-    let maximumControlsHeight: CGFloat = usesExpandedLayout ? .infinity : 520
-    let controlsHeight = max(
-      editorMinimumControlsHeight,
-      min(
-        maximumControlsHeight,
-        usesSquareCanvas ? availableControlsHeight : defaultControlsHeight
-      )
-    )
-    let toolBarHeight: CGFloat = 54
-    let settingsHeight = max(118, controlsHeight - toolBarHeight - 8)
+    let layout = workspaceLayout(for: availableSize)
+    let panelWidth = layout.panelWidth
+    let toolBarHeight: CGFloat = 56
+    let settingsHeight = layout.settingsHeight
 
-    if isLandscape {
-      let landscapePanelWidth = landscapeSettingsPanelWidth(for: availableSize)
-      let landscapeControlsHeight = min(
-        usesExpandedLayout ? .infinity : 520,
-        max(180, availableSize.height - 16)
-      )
+    if layout.usesSideBySide {
+      let landscapePanelWidth = layout.panelWidth
+      let landscapeControlsHeight = layout.settingsHeight
 
       ZStack(alignment: .trailing) {
         HStack(spacing: 8) {
@@ -492,61 +557,27 @@ struct ProjectEditorView: View {
     }
   }
 
+  private func workspaceLayout(for size: CGSize) -> EditorWorkspaceLayout {
+    EditorWorkspaceLayout(
+      size: size,
+      controlsHidden: isControlsHidden,
+      squareCanvas: usesSquareCanvas,
+      accessibilityText: dynamicTypeSize.isAccessibilitySize
+    )
+  }
+
   private func previewMaximumHeight(for availableSize: CGSize) -> CGFloat {
-    if LayoutEngine.flowAxis(for: draft) == .horizontal {
-      return max(140, availableSize.height * 0.5)
-    }
-
-    let defaultHeight: CGFloat
-    if isControlsHidden {
-      defaultHeight = max(140, availableSize.height - 12)
-    } else if availableSize.width > availableSize.height {
-      defaultHeight = max(140, availableSize.height - 14)
-    } else if usesSquareCanvas {
-      let fullWidthSquare = max(140, availableSize.width - 32)
-      let heightBeforeControls = max(
-        140,
-        availableSize.height
-          - editorMinimumControlsHeight
-          - editorPortraitReservedVerticalSpace
-      )
-      defaultHeight = min(fullWidthSquare, heightBeforeControls)
-    } else if usesExpandedLayout {
-      defaultHeight = max(220, availableSize.height * 0.48)
-    } else {
-      defaultHeight = max(140, availableSize.height * 0.42)
-    }
-
-    return defaultHeight
+    workspaceLayout(for: availableSize).previewHeight
   }
 
   private func landscapePreviewWorkspaceWidth(for availableSize: CGSize) -> CGFloat {
-    let controlsWidth =
-      landscapeSettingsPanelWidth(for: availableSize)
-      + editorLandscapeToolbarWidth
-      + 16
-    return max(140, availableSize.width - controlsWidth - 8)
-  }
-
-  private func landscapeSettingsPanelWidth(for availableSize: CGSize) -> CGFloat {
-    if usesExpandedLayout {
-      return min(520, max(340, availableSize.width * 0.36))
-    }
-    return min(420, max(260, availableSize.width * 0.42))
-  }
-
-  private var usesExpandedLayout: Bool {
-    horizontalSizeClass == .regular
+    workspaceLayout(for: availableSize).previewWidth
   }
 
   private var usesSquareCanvas: Bool {
     let outputSize = LayoutEngine.outputSize(for: draft)
     return abs(outputSize.width - outputSize.height) < 0.5
   }
-
-  private var editorMinimumControlsHeight: CGFloat { usesExpandedLayout ? 240 : 180 }
-  private var editorPortraitReservedVerticalSpace: CGFloat { 24 }
-  private var editorLandscapeToolbarWidth: CGFloat { 54 }
 
   private var bottomToolBar: some View {
     HStack(spacing: 12) {
@@ -590,7 +621,7 @@ struct ProjectEditorView: View {
     } label: {
       Image(systemName: tool.symbol)
         .font(.system(size: 18, weight: .semibold))
-        .frame(width: 42, height: 42)
+        .frame(width: 44, height: 44)
         .foregroundStyle(activeEditorTool == tool ? Color.white : Color.primary)
         .background(
           activeEditorTool == tool ? Color.indigo : Color.clear,
@@ -600,6 +631,7 @@ struct ProjectEditorView: View {
           if tool == .photos {
             Text("\(draft.photos.count)")
               .font(.caption2.weight(.bold))
+              .dynamicTypeSize(...DynamicTypeSize.large)
               .foregroundStyle(.white)
               .frame(minWidth: 17, minHeight: 17)
               .background(.indigo, in: Circle())
@@ -656,7 +688,7 @@ struct ProjectEditorView: View {
       Label("Edit", systemImage: "slider.horizontal.3")
         .font(.subheadline.weight(.semibold))
         .padding(.horizontal, 13)
-        .frame(height: 42)
+        .frame(minHeight: 44)
         .background(.regularMaterial, in: Capsule())
         .overlay { Capsule().stroke(Color.primary.opacity(0.1), lineWidth: 1) }
     }
@@ -667,63 +699,41 @@ struct ProjectEditorView: View {
 
   private func settingsPanel(for tool: EditorTool, width: CGFloat, height: CGFloat) -> some View {
     VStack(spacing: 0) {
-      HStack {
-        if tool == .photos {
-          HStack(alignment: .firstTextBaseline, spacing: 10) {
-            Label(tool.title, systemImage: tool.symbol)
-              .font(.headline)
-
-            Text("\(draft.photos.count)/12")
-              .font(.caption.weight(.semibold))
-              .foregroundStyle(.secondary)
-              .monospacedDigit()
-
-            Group {
-              if UIDevice.current.userInterfaceIdiom == .pad {
-                Button {
-                  showingExpandedPhotoPicker = true
-                } label: {
-                  Text("Add Photos")
-                    .font(.subheadline.weight(.semibold))
-                }
-              } else {
-                PhotosPicker(
-                  selection: $pickerItems,
-                  maxSelectionCount: max(0, 12 - draft.photos.count),
-                  matching: .images
-                ) {
-                  Text("Add Photos")
-                    .font(.subheadline.weight(.semibold))
-                }
-              }
+      VStack(alignment: .leading, spacing: 8) {
+        HStack(spacing: 8) {
+          (dynamicTypeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 2))
+            : AnyLayout(HStackLayout(spacing: 8))) {
+            Text(tool.title).font(.headline)
+            if tool == .photos {
+              Text("\(draft.photos.count)/12")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+                .fixedSize()
             }
-            .offset(y: 1)
-            .disabled(isImporting || draft.photos.count >= 12)
           }
-        } else {
-          Label(tool.title, systemImage: tool.symbol)
-            .font(.headline)
-
-          if tool == .canvas {
-            collageBackgroundToggle
-          } else if tool == .layout {
-            aspectRatioMenu
+          Spacer(minLength: 0)
+          if !dynamicTypeSize.isAccessibilitySize {
+            panelAccessory(for: tool)
           }
+          Button { toggleControls() } label: {
+            Image(systemName: "xmark.circle.fill")
+              .font(.title3)
+              .foregroundStyle(.secondary)
+              .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+              .frame(width: 44, height: 44)
+          }
+          .buttonStyle(.plain)
+          .accessibilityLabel("Close tools")
         }
-
-        Spacer()
-        Button {
-          toggleControls()
-        } label: {
-          Image(systemName: "xmark.circle.fill")
-            .font(.title3)
-            .foregroundStyle(.secondary)
+        if dynamicTypeSize.isAccessibilitySize {
+          panelAccessory(for: tool)
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Close tools")
       }
       .padding(.horizontal, 16)
-      .frame(height: 48)
+      .padding(.vertical, 4)
+      .fixedSize(horizontal: false, vertical: true)
 
       Divider()
 
@@ -737,6 +747,29 @@ struct ProjectEditorView: View {
         .stroke(Color.primary.opacity(0.08), lineWidth: 1)
     }
     .shadow(color: .black.opacity(0.18), radius: 14, y: 5)
+  }
+
+  @ViewBuilder
+  private func panelAccessory(for tool: EditorTool) -> some View {
+    if tool == .photos {
+      Group {
+        if UIDevice.current.userInterfaceIdiom == .pad {
+          Button("Add Photos") { showingExpandedPhotoPicker = true }
+        } else {
+          PhotosPicker(
+            selection: $pickerItems,
+            maxSelectionCount: max(0, 12 - draft.photos.count),
+            matching: .images
+          ) { Text("Add Photos") }
+        }
+      }
+      .font(.subheadline.weight(.semibold))
+      .disabled(isImporting || draft.photos.count >= 12)
+    } else if tool == .canvas {
+      collageBackgroundToggle
+    } else if tool == .layout {
+      aspectRatioMenu
+    }
   }
 
   @ViewBuilder
@@ -815,6 +848,18 @@ struct ProjectEditorView: View {
     }
   }
 
+  private var resolutionControlsLayout: AnyLayout {
+    dynamicTypeSize.isAccessibilitySize
+      ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
+      : AnyLayout(HStackLayout(spacing: 6))
+  }
+
+  private var exportActionsLayout: AnyLayout {
+    dynamicTypeSize.isAccessibilitySize
+      ? AnyLayout(VStackLayout(alignment: .leading, spacing: 12))
+      : AnyLayout(HStackLayout(spacing: 12))
+  }
+
   @ViewBuilder
   private func settingsSections(for tool: EditorTool) -> some View {
     switch tool {
@@ -828,9 +873,11 @@ struct ProjectEditorView: View {
           }
         }
 
-        ForEach(draft.photos) { photo in
+        ForEach(Array(draft.photos.enumerated()), id: \.element.id) { index, photo in
           PhotoRow(
             photo: photo,
+            position: index + 1,
+            totalCount: draft.photos.count,
             image: store.thumbnailImage(for: photo),
             viewOriginal: { showOriginalPhoto(id: photo.id) },
             remove: { removePhoto(id: photo.id) }
@@ -915,10 +962,10 @@ struct ProjectEditorView: View {
 
           VStack(alignment: .leading, spacing: 3) {
             LazyVGrid(
-              columns: [
-                GridItem(.flexible(), spacing: 10),
-                GridItem(.flexible(), spacing: 10),
-              ],
+              columns: Array(
+                repeating: GridItem(.flexible(), spacing: 10),
+                count: dynamicTypeSize.isAccessibilitySize ? 1 : 2
+              ),
               spacing: 10
             ) {
               ForEach(ResolutionPreset.allCases) { preset in
@@ -949,7 +996,7 @@ struct ProjectEditorView: View {
               }
             }
 
-            HStack(spacing: 6) {
+            resolutionControlsLayout {
               HStack(spacing: 6) {
                 Text("Custom · \(draft.outputMaxDimension) px")
                   .lineLimit(1)
@@ -996,7 +1043,7 @@ struct ProjectEditorView: View {
     case .output:
       Section {
         VStack(alignment: .leading, spacing: 8) {
-          HStack(spacing: 12) {
+          exportActionsLayout {
             Button {
               requestExportAction(.preview)
             } label: {
@@ -1028,6 +1075,7 @@ struct ProjectEditorView: View {
               .fixedSize(horizontal: true, vertical: false)
             }
             .buttonStyle(.borderedProminent)
+            .keyboardShortcut("e", modifiers: [.command, .shift])
             .controlSize(.small)
           }
           .disabled(
@@ -1057,7 +1105,7 @@ struct ProjectEditorView: View {
               Text(format.title).tag(format)
             }
           }
-          .pickerStyle(.segmented)
+          .modifier(AdaptiveFormatPickerStyle())
 
           Text(draft.outputFormat.summary)
             .font(.caption)
@@ -1078,19 +1126,30 @@ struct ProjectEditorView: View {
               }
             }
             ForEach(OutputQuality.allCases) { quality in
-              HStack {
+              qualityDescriptionLayout {
                 Text(quality.title)
-                Spacer()
+                  .fontWeight(quality == draft.quality ? .semibold : .regular)
+                if !dynamicTypeSize.isAccessibilitySize {
+                  Spacer(minLength: 12)
+                }
                 Text(quality.summary)
                   .font(.caption)
                   .foregroundStyle(quality == draft.quality ? .primary : .secondary)
               }
+              .fixedSize(horizontal: false, vertical: true)
+              .accessibilityElement(children: .combine)
             }
           }
         }
       }
 
     }
+  }
+
+  private var qualityDescriptionLayout: AnyLayout {
+    dynamicTypeSize.isAccessibilitySize
+      ? AnyLayout(VStackLayout(alignment: .leading, spacing: 4))
+      : AnyLayout(HStackLayout())
   }
 
   private var layoutSelector: some View {
@@ -1125,7 +1184,7 @@ struct ProjectEditorView: View {
                 Label(family.title, systemImage: family.symbol)
                   .font(.caption.weight(.medium))
                   .padding(.horizontal, 9)
-                  .frame(height: 30)
+                  .frame(minHeight: 44)
                   .foregroundStyle(displayedFamily == family ? Color.white : Color.primary)
                   .background(
                     displayedFamily == family
@@ -1164,9 +1223,9 @@ struct ProjectEditorView: View {
                     isSelected: selectedTemplate.id == template.id
                   )
                   Text(template.title)
-                    .font(.caption2)
-                    .lineLimit(1)
-                    .frame(width: 82)
+                    .font(.caption)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(width: dynamicTypeSize.isAccessibilitySize ? 160 : 90)
                 }
               }
               .buttonStyle(.plain)
@@ -1190,14 +1249,53 @@ struct ProjectEditorView: View {
           }
         }
       }
+
+      if displayedFamily == .custom {
+        Divider()
+        if !matchingSavedCustomLayouts.isEmpty {
+          Text("My Layouts")
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.secondary)
+          ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+              ForEach(matchingSavedCustomLayouts) { layout in
+                Button {
+                  selectSavedCustomLayout(layout)
+                } label: {
+                  Label(
+                    layout.name,
+                    systemImage: draft.savedCustomLayoutID == layout.id
+                      ? "checkmark.circle.fill" : "rectangle.split.2x2"
+                  )
+                  .font(.caption)
+                }
+                .buttonStyle(.bordered)
+              }
+            }
+          }
+        }
+        Button("Save Current as My Layout", systemImage: "plus.rectangle.on.rectangle") {
+          saveCurrentCustomLayout()
+        }
+        .font(.caption.weight(.semibold))
+      }
     }
+  }
+
+  private var matchingSavedCustomLayouts: [SavedCustomLayout] {
+    store.savedCustomLayouts.filter { $0.photoCount == draft.photos.count }
   }
 
   private func selectLayout(_ template: CollageLayoutTemplate) {
     guard draft.layoutID != template.id else { return }
+    let startingCustomFrames: [NormalizedLayoutFrame]? = {
+      guard case .custom = template.recipe else { return nil }
+      return normalizedCurrentLayoutFrames()
+    }()
     withAnimation(.easeInOut(duration: 0.2)) {
       draft.layoutID = template.id
       draft.clearCustomLayout()
+      draft.customLayoutFrames = startingCustomFrames
       draft.clearSavedLayoutSnapshot()
       switch template.recipe {
       case .hero:
@@ -1219,6 +1317,47 @@ struct ProjectEditorView: View {
       }
       resetLayoutDividerSizes()
       refitPhotosForCurrentLayout()
+    }
+  }
+
+  private func normalizedCurrentLayoutFrames() -> [NormalizedLayoutFrame] {
+    var structuralProject = draft
+    structuralProject.spacing = 0
+    let size = LayoutEngine.outputSize(for: structuralProject)
+    return LayoutEngine.layoutFrames(for: structuralProject, in: size).map {
+      NormalizedLayoutFrame(rect: $0.rect, in: size)
+    }
+  }
+
+  private func selectSavedCustomLayout(_ layout: SavedCustomLayout) {
+    guard layout.photoCount == draft.photos.count else { return }
+    withAnimation(.easeInOut(duration: 0.2)) {
+      draft.layoutID = LayoutCatalog.customTemplate(photoCount: draft.photos.count).id
+      draft.customLayoutFrames = layout.frames
+      draft.savedCustomLayoutID = layout.id
+      draft.clearSavedLayoutSnapshot()
+      draft.clearLayoutCustomization(invalidateExport: true)
+      selectedLayoutFamily = .custom
+      refitPhotosForCurrentLayout()
+    }
+  }
+
+  private func saveCurrentCustomLayout() {
+    let frames = normalizedCurrentLayoutFrames()
+    guard frames.count == draft.photos.count else { return }
+    Task {
+      let sequence = matchingSavedCustomLayouts.count + 1
+      guard let id = await store.createCustomLayout(
+        name: "My Layout \(sequence)",
+        photoCount: draft.photos.count,
+        frames: frames
+      ) else { return }
+      draft.layoutID = LayoutCatalog.customTemplate(photoCount: draft.photos.count).id
+      draft.customLayoutFrames = frames
+      draft.savedCustomLayoutID = id
+      draft.clearSavedLayoutSnapshot()
+      draft.clearLayoutCustomization(invalidateExport: true)
+      selectedLayoutFamily = .custom
     }
   }
 
@@ -1356,10 +1495,40 @@ struct ProjectEditorView: View {
 
   @discardableResult
   private func saveDraft() async -> Bool {
+    let pendingCheckpoint = draftCheckpointTask
+    pendingCheckpoint?.cancel()
+    await pendingCheckpoint?.value
+    draftCheckpointTask = nil
+    let savedChanges = draft.hasUserChanges(comparedTo: savedSnapshot)
     guard let savedDraft = await store.saveProject(draft) else { return false }
+    completedMeaningfulWork = completedMeaningfulWork || savedChanges
     draft = savedDraft
     savedSnapshot = savedDraft
+    await store.discardDraft(projectID: savedDraft.id)
+    undoHistory.reset()
     return true
+  }
+
+  private func presentRecoveryIfNeeded() async {
+    guard let recovery = store.recoverableDraft(projectID: draft.id) else { return }
+    if recovery.project.editorState == savedSnapshot.editorState {
+      await store.discardDraft(projectID: recovery.id)
+    } else {
+      recoverableDraft = recovery
+    }
+  }
+
+  private func scheduleDraftCheckpoint(_ project: Project) {
+    draftCheckpointTask?.cancel()
+    guard project.hasUserChanges(comparedTo: savedSnapshot) else {
+      Task { await store.discardDraft(projectID: project.id) }
+      return
+    }
+    draftCheckpointTask = Task {
+      try? await Task.sleep(for: .milliseconds(700))
+      guard !Task.isCancelled else { return }
+      await store.persistDraft(project)
+    }
   }
 
   private func beginSaving(
@@ -1378,7 +1547,7 @@ struct ProjectEditorView: View {
         return
       }
       if dismissAfterSave {
-        dismiss()
+        finishEditing()
       } else {
         isSaving = false
         completion?()
@@ -1706,16 +1875,22 @@ struct ProjectEditorView: View {
       )
     }
     _ = try await persistPreparedExport(export)
+    completedMeaningfulWork = true
     try? FileManager.default.removeItem(at: export.fileURL)
     exportPreview = nil
     message = EditorMessage(
       title: "Saved to Photos",
       detail: successDetail
     )
+    if exitsAfterSuccessfulExport {
+      exitsAfterSuccessfulExport = false
+      finishEditing()
+    }
   }
 
   private func sharePreparedExport(_ export: PreparedCollageExport) async throws {
     let persistedURL = try await persistPreparedExport(export)
+    completedMeaningfulWork = true
     try? FileManager.default.removeItem(at: export.fileURL)
     exportPreview = nil
     try? await Task.sleep(nanoseconds: 250_000_000)
@@ -1741,6 +1916,14 @@ struct ProjectEditorView: View {
       from: nil,
       for: nil
     )
+  }
+
+  private func finishEditing() {
+    if completedMeaningfulWork, draft.photos.count >= 2 {
+      store.reviewPromptPolicy.recordCompletedUsage()
+      completedMeaningfulWork = false
+    }
+    dismiss()
   }
 }
 
@@ -1922,61 +2105,100 @@ private struct LayoutThumbnail: View {
 }
 
 private struct PhotoRow: View {
+  @Environment(\.dynamicTypeSize) private var dynamicTypeSize
   let photo: CollagePhoto
+  let position: Int
+  let totalCount: Int
   let image: UIImage?
   let viewOriginal: () -> Void
   let remove: () -> Void
 
   var body: some View {
-    HStack(spacing: 12) {
-      Button(action: viewOriginal) {
-        Group {
-          if let image {
-            Image(uiImage: image).resizable().scaledToFill()
-          } else {
-            Image(systemName: "photo.badge.exclamationmark").foregroundStyle(.secondary)
+    Group {
+      if dynamicTypeSize.isAccessibilitySize {
+        VStack(alignment: .leading, spacing: 12) {
+          HStack {
+            thumbnail
+            Spacer()
+            actions
           }
+          metadata
         }
-        .frame(width: 54, height: 54)
-        .background(.quaternary)
-        .overlay {
-          if let image, let focusArea = photo.detectedFocusArea {
-            DetectedFocusAreaOverlay(area: focusArea, imageSize: image.size)
-          }
+      } else {
+        HStack(spacing: 12) {
+          thumbnail
+          metadata
+          actions
         }
-        .clipShape(RoundedRectangle(cornerRadius: 8))
       }
-      .buttonStyle(.plain)
-      .accessibilityLabel("View original photo")
-      .accessibilityHint("Opens the full-resolution photo with zoom and pan controls")
+    }
+    .accessibilityElement(children: .ignore)
+    .accessibilityLabel("Photo \(position) of \(totalCount)")
+    .accessibilityValue(
+      "\(photo.pixelWidth) by \(photo.pixelHeight) pixels, "
+        + (photo.focusSource == .automatic ? "subject focus detected" : "focus adjusted")
+    )
+    .accessibilityHint("Double tap to view the original photo")
+    .accessibilityAction(.default, viewOriginal)
+    .accessibilityAction(named: "Remove Photo", remove)
+  }
 
-      Button(action: viewOriginal) {
-        VStack(alignment: .leading, spacing: 3) {
-          Text("Photo \(photo.pixelWidth) × \(photo.pixelHeight)")
-            .font(.subheadline.weight(.medium))
-          Label(
-            photo.focusSource == .automatic ? "Subject focus detected" : "Focus adjusted",
-            systemImage: photo.focusSource == .automatic ? "viewfinder" : "hand.draw"
-          )
-          .font(.caption)
-          .foregroundStyle(.secondary)
+  private var thumbnail: some View {
+    Button(action: viewOriginal) {
+      Group {
+        if let image {
+          Image(uiImage: image).resizable().scaledToFill()
+        } else {
+          Image(systemName: "photo.badge.exclamationmark").foregroundStyle(.secondary)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .contentShape(Rectangle())
       }
-      .buttonStyle(.plain)
-      .accessibilityLabel("View original photo")
-      .accessibilityHint("Opens the full-resolution photo with zoom and pan controls")
+      .frame(width: 54, height: 54)
+      .background(.quaternary)
+      .overlay {
+        if let image, let focusArea = photo.detectedFocusArea {
+          DetectedFocusAreaOverlay(area: focusArea, imageSize: image.size)
+        }
+      }
+      .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+    .buttonStyle(.plain)
+    .accessibilityLabel("View original photo")
+  }
+
+  private var metadata: some View {
+    Button(action: viewOriginal) {
+      VStack(alignment: .leading, spacing: 3) {
+        Text("Photo \(photo.pixelWidth) × \(photo.pixelHeight)")
+          .font(.subheadline.weight(.medium))
+        Label(
+          photo.focusSource == .automatic ? "Subject focus detected" : "Focus adjusted",
+          systemImage: photo.focusSource == .automatic ? "viewfinder" : "hand.draw"
+        )
+        .font(.caption)
+        .foregroundStyle(.secondary)
+      }
+      .fixedSize(horizontal: false, vertical: true)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+  }
+
+  private var actions: some View {
+    HStack(spacing: 0) {
       Button(action: viewOriginal) {
         Image(systemName: "arrow.up.left.and.arrow.down.right")
+          .frame(width: 44, height: 44)
       }
-      .buttonStyle(.plain)
       .accessibilityLabel("View original photo")
       Button(role: .destructive, action: remove) {
         Image(systemName: "minus.circle.fill")
+          .frame(width: 44, height: 44)
       }
-      .buttonStyle(.plain)
+      .accessibilityLabel("Remove Photo")
     }
+    .font(.system(size: 20))
+    .buttonStyle(.plain)
   }
 }
 
@@ -2067,4 +2289,53 @@ private enum EditorTool: String, CaseIterable, Identifiable {
 private struct ShareItem: Identifiable {
   let id = UUID()
   let url: URL
+}
+
+/// Allocates disjoint canvas and tool regions from the current window, including fold transitions.
+struct EditorWorkspaceLayout {
+  let usesSideBySide: Bool
+  let previewWidth: CGFloat
+  let previewHeight: CGFloat
+  let panelWidth: CGFloat
+  let settingsHeight: CGFloat
+
+  init(size: CGSize, controlsHidden: Bool, squareCanvas: Bool, accessibilityText: Bool) {
+    let width = max(1, size.width)
+    let height = max(1, size.height)
+    usesSideBySide = !controlsHidden && width > height && width >= 600 && height >= 260
+    if controlsHidden {
+      previewWidth = width
+      previewHeight = max(1, height - 12)
+      panelWidth = 0
+      settingsHeight = 0
+    } else if usesSideBySide {
+      panelWidth = min(520, width * (accessibilityText ? 0.5 : 0.42))
+      previewWidth = max(1, width - panelWidth - 80)
+      previewHeight = max(1, height - 14)
+      settingsHeight = max(1, height - 16)
+    } else {
+      previewWidth = width
+      panelWidth = max(1, width - 16)
+      let minimumControls = min(height * 0.65, accessibilityText ? 340.0 : 240.0)
+      let desiredPreview = accessibilityText ? height * 0.28
+        : squareCanvas ? width - 32 : height * 0.42
+      previewHeight = max(1, min(desiredPreview, height - minimumControls - 24))
+      // Preview includes eight points of bottom padding; tools have a 56-point rail,
+      // eight-point gap and eight-point bottom margin, with another eight points between regions.
+      settingsHeight = max(1, height - previewHeight - 88)
+    }
+  }
+}
+
+private struct AdaptiveFormatPickerStyle: ViewModifier {
+  @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+  @ViewBuilder
+  func body(content: Content) -> some View {
+    if dynamicTypeSize.isAccessibilitySize {
+      content.pickerStyle(.menu)
+    } else {
+      content.pickerStyle(.segmented)
+    }
+  }
 }

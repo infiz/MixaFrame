@@ -3,6 +3,8 @@ import SwiftUI
 import UIKit
 
 struct ExportPreviewView: View {
+  @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+  @Environment(\.verticalSizeClass) private var verticalSizeClass
   let export: PreparedCollageExport
   let formatTitle: String
   let existingPhotoAssetIdentifier: String?
@@ -40,55 +42,15 @@ struct ExportPreviewView: View {
         }
       }
       .safeAreaInset(edge: .bottom) {
-        VStack(spacing: 8) {
-          Label(export.fileURL.lastPathComponent, systemImage: "doc")
-            .font(.caption.monospaced())
-            .lineLimit(1)
-            .truncationMode(.middle)
-            .frame(maxWidth: .infinity, alignment: .leading)
-          Text(exportDetails)
-            .font(.caption)
-            .foregroundStyle(.secondary)
-          if export.wasScaledForSafety {
-            Label(
-              "Flow strip scaled from \(pixelDimensions(export.requestedOutputSize)) to fit safely.",
-              systemImage: "arrow.down.right.and.arrow.up.left"
-            )
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .frame(maxWidth: .infinity, alignment: .leading)
-          }
-          if export.includesWatermark {
-            Label("Free export · MixaFrame watermark included", systemImage: "info.circle")
-              .font(.caption)
-              .foregroundStyle(.secondary)
-              .frame(maxWidth: .infinity, alignment: .leading)
-          }
-          Button {
-            if existingPhotoAssetIdentifier != nil {
-              isPhotoExportChoicePresented = true
-            } else {
-              saveToPhotos(mode: .createNew)
-            }
-          } label: {
-            HStack {
-              if isSaving { ProgressView().tint(.white) }
-              Label(
-                isSaving ? "Saving…" : "Save to Photos",
-                systemImage: "square.and.arrow.down"
-              )
-            }
-            .frame(maxWidth: .infinity)
-          }
-          .buttonStyle(.borderedProminent)
-          .controlSize(.large)
-          .disabled(isSaving)
+        ViewThatFits(in: .vertical) {
+          exportFooter
+          ScrollView { exportFooter }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .background(.ultraThinMaterial)
+        .frame(maxHeight: dynamicTypeSize.isAccessibilitySize
+          ? (verticalSizeClass == .compact ? 160 : 220) : nil)
       }
     }
+    .preferredColorScheme(.dark)
     .interactiveDismissDisabled(true)
     .sheet(isPresented: $isPhotoExportChoicePresented, onDismiss: completePhotoExportChoice) {
       if let existingPhotoAssetIdentifier {
@@ -103,7 +65,7 @@ struct ExportPreviewView: View {
             isPhotoExportChoicePresented = false
           }
         )
-        .presentationDetents([.medium])
+        .presentationDetents(dynamicTypeSize.isAccessibilitySize ? [.large] : [.medium, .large])
         .presentationDragIndicator(.visible)
       }
     }
@@ -118,6 +80,56 @@ struct ExportPreviewView: View {
     } message: {
       Text(errorMessage ?? "The project could not be saved.")
     }
+  }
+
+  private var exportFooter: some View {
+    VStack(spacing: 8) {
+      Label(export.fileURL.lastPathComponent, systemImage: "doc")
+        .font(.caption.monospaced())
+        .lineLimit(1)
+        .truncationMode(.middle)
+        .frame(maxWidth: .infinity, alignment: .leading)
+      Text(exportDetails)
+        .font(.caption)
+        .foregroundStyle(.secondary)
+      if export.wasScaledForSafety {
+        Label(
+          "Flow strip scaled from \(pixelDimensions(export.requestedOutputSize)) to fit safely.",
+          systemImage: "arrow.down.right.and.arrow.up.left"
+        )
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .frame(maxWidth: .infinity, alignment: .leading)
+      }
+      if export.includesWatermark {
+        Label("Free export · MixaFrame watermark included", systemImage: "info.circle")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .frame(maxWidth: .infinity, alignment: .leading)
+      }
+      Button {
+        if existingPhotoAssetIdentifier != nil {
+          isPhotoExportChoicePresented = true
+        } else {
+          saveToPhotos(mode: .createNew)
+        }
+      } label: {
+        HStack {
+          if isSaving { ProgressView().tint(.white) }
+          Label(
+            isSaving ? "Saving…" : "Save to Photos",
+            systemImage: "square.and.arrow.down"
+          )
+        }
+        .frame(maxWidth: .infinity)
+      }
+      .buttonStyle(.borderedProminent)
+      .controlSize(.large)
+      .disabled(isSaving)
+    }
+    .padding(.horizontal, 16)
+    .padding(.vertical, 10)
+    .background(.ultraThinMaterial)
   }
 
   private func saveToPhotos(mode: PhotoLibraryExportMode) {
@@ -187,53 +199,74 @@ struct ExistingPhotoExportChoiceView: View {
 
   var body: some View {
     NavigationStack {
-      VStack(spacing: 14) {
-        Group {
-          if let previewImage {
-            Image(uiImage: previewImage)
-              .resizable()
-              .scaledToFit()
-          } else if isLoading {
-            ProgressView("Loading previous export…")
-          } else {
-            ContentUnavailableView(
-              "Preview Unavailable",
-              systemImage: "photo.badge.exclamationmark",
-              description: Text(loadMessage ?? "The previous photo could not be loaded.")
+      ScrollView {
+        VStack(spacing: 14) {
+          Button {
+            onSelect(.replaceExisting)
+          } label: {
+            Text("Replace Existing Photo")
+              .fixedSize(horizontal: false, vertical: true)
+              .frame(maxWidth: .infinity)
+          }
+          .buttonStyle(.borderedProminent)
+          .controlSize(.large)
+          .frame(maxWidth: .infinity)
+          .disabled(!canReplace)
+
+          Button {
+            onSelect(.createNew)
+          } label: {
+            Text("Create New Photo")
+              .fixedSize(horizontal: false, vertical: true)
+              .frame(maxWidth: .infinity)
+          }
+          .buttonStyle(.bordered)
+          .controlSize(.large)
+          .frame(maxWidth: .infinity)
+
+          Group {
+            if let previewImage {
+              Image(uiImage: previewImage)
+                .resizable()
+                .scaledToFit()
+                .frame(maxWidth: .infinity, minHeight: 130, maxHeight: 170)
+            } else if isLoading {
+              ProgressView("Loading previous export…")
+                .padding(20)
+                .frame(maxWidth: .infinity)
+            } else {
+              VStack(spacing: 12) {
+                Image(systemName: "photo.badge.exclamationmark")
+                  .font(.system(size: 24))
+                  .accessibilityHidden(true)
+                Text("Preview Unavailable")
+                  .font(.headline)
+                Text(loadMessage ?? "The previous photo could not be loaded.")
+                  .font(.body)
+                  .foregroundStyle(.secondary)
+              }
+              .multilineTextAlignment(.center)
+              .fixedSize(horizontal: false, vertical: true)
+              .padding(20)
+              .frame(maxWidth: .infinity)
+            }
+          }
+          .background(
+            Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 14)
+          )
+          .clipShape(RoundedRectangle(cornerRadius: 14))
+
+          if let exportedAt {
+            Text(
+              "Previously exported "
+                + exportedAt.formatted(date: .abbreviated, time: .shortened)
             )
+            .font(.caption)
+            .foregroundStyle(.secondary)
           }
         }
-        .frame(maxWidth: .infinity, minHeight: 130, maxHeight: 170)
-        .background(
-          Color(uiColor: .secondarySystemBackground), in: RoundedRectangle(cornerRadius: 14)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 14))
-
-        if let exportedAt {
-          Text(
-            "Previously exported "
-              + exportedAt.formatted(date: .abbreviated, time: .shortened)
-          )
-          .font(.caption)
-          .foregroundStyle(.secondary)
-        }
-
-        Button("Replace Existing Photo") {
-          onSelect(.replaceExisting)
-        }
-        .buttonStyle(.borderedProminent)
-        .controlSize(.large)
-        .frame(maxWidth: .infinity)
-        .disabled(!canReplace)
-
-        Button("Create New Photo") {
-          onSelect(.createNew)
-        }
-        .buttonStyle(.bordered)
-        .controlSize(.large)
-        .frame(maxWidth: .infinity)
+        .padding(16)
       }
-      .padding(16)
       .navigationTitle("Photo Already Exported")
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
@@ -251,7 +284,7 @@ struct ExistingPhotoExportChoiceView: View {
     let status = await PHPhotoLibrary.requestAuthorization(for: .readWrite)
     guard status == .authorized || status == .limited else {
       isLoading = false
-      loadMessage = "Allow Photo Library access to preview or replace the previous export."
+      loadMessage = "Photo Library access is needed to preview or replace this export. You can still create a new photo."
       return
     }
 
@@ -292,6 +325,7 @@ struct ExistingPhotoExportChoiceView: View {
 }
 
 struct OriginalPhotoViewer: View {
+  @Environment(\.dynamicTypeSize) private var dynamicTypeSize
   let photo: CollagePhoto
   let loadOriginal: () async -> UIImage?
   let cropConfiguration: CollagePhotoCropConfiguration
@@ -364,46 +398,11 @@ struct OriginalPhotoViewer: View {
         }
       }
       .safeAreaInset(edge: .bottom) {
-        VStack(spacing: 8) {
-          Toggle(isOn: $showsFocusGuides) {
-            Label("Show Focus Area", systemImage: "viewfinder")
-              .font(.subheadline.weight(.medium))
-          }
-          .tint(.indigo)
-
-          if !cropConfiguration.usesAspectFit {
-            HStack(spacing: 10) {
-              Label("Crop", systemImage: "crop")
-                .font(.caption.weight(.medium))
-              Slider(
-                value: Binding(
-                  get: { cropZoom },
-                  set: { selectCropZoom($0) }
-                ),
-                in: 1...4
-              )
-              Text("\(cropZoom, specifier: "%.1f")×")
-                .font(.caption.monospacedDigit())
-                .frame(width: 34, alignment: .trailing)
-            }
-            .tint(.yellow)
-
-            Text("Drag the yellow crop shape to reposition it, or use the slider to resize it.")
-              .font(.caption)
-              .foregroundStyle(.white.opacity(0.78))
-          } else {
-            Text("This layout uses the complete photo without cropping.")
-              .font(.caption)
-              .foregroundStyle(.white.opacity(0.78))
-          }
-
-          Text("\(photo.pixelWidth) × \(photo.pixelHeight) px · Original resolution")
-            .font(.caption.monospacedDigit())
-            .foregroundStyle(.white.opacity(0.85))
+        ViewThatFits(in: .vertical) {
+          cropControls
+          ScrollView { cropControls }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .background(.black.opacity(0.82))
+        .frame(maxHeight: dynamicTypeSize.isAccessibilitySize ? 160 : nil)
       }
     }
     .preferredColorScheme(.dark)
@@ -412,6 +411,53 @@ struct OriginalPhotoViewer: View {
       image = await loadOriginal()
       didFailToLoad = image == nil
     }
+  }
+
+  private var cropControls: some View {
+    VStack(spacing: 8) {
+      Toggle(isOn: $showsFocusGuides) {
+        Label("Show Focus Area", systemImage: "viewfinder")
+          .font(.subheadline.weight(.medium))
+      }
+      .tint(.indigo)
+
+      if !cropConfiguration.usesAspectFit {
+        (dynamicTypeSize.isAccessibilitySize
+          ? AnyLayout(VStackLayout(alignment: .leading, spacing: 10))
+          : AnyLayout(HStackLayout(spacing: 10))) {
+          Label("Crop", systemImage: "crop")
+            .font(.caption.weight(.medium))
+          Slider(
+            value: Binding(
+              get: { cropZoom },
+              set: { selectCropZoom($0) }
+            ),
+            in: 1...4
+          )
+          Text("\(cropZoom, specifier: "%.1f")×")
+            .font(.caption.monospacedDigit())
+            .fixedSize()
+            .frame(minWidth: 34, alignment: .trailing)
+        }
+        .tint(.yellow)
+
+        Text("Drag the yellow crop shape to reposition it, or use the slider to resize it.")
+          .font(.caption)
+          .foregroundStyle(.white.opacity(0.78))
+      } else {
+        Text("This layout uses the complete photo without cropping.")
+          .font(.caption)
+          .foregroundStyle(.white.opacity(0.78))
+      }
+
+      Text("\(photo.pixelWidth) × \(photo.pixelHeight) px · Original resolution")
+        .font(.caption.monospacedDigit())
+        .foregroundStyle(.white.opacity(0.85))
+    }
+    .fixedSize(horizontal: false, vertical: true)
+    .padding(.horizontal, 16)
+    .padding(.vertical, 10)
+    .background(.black.opacity(0.82))
   }
 
   private func selectFocus(_ point: CGPoint) {
@@ -489,19 +535,25 @@ private struct ZoomableImageViewer: View {
             setScale(scale / 1.5, in: proxy.size)
           } label: {
             Image(systemName: "minus.magnifyingglass")
+              .frame(width: 44, height: 44)
           }
           .accessibilityLabel("Zoom Out")
           Text("\(Int((scale * 100).rounded()))%")
             .font(.caption.monospacedDigit())
+            .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+            .lineLimit(1)
+            .fixedSize()
             .frame(minWidth: 44)
           Button {
             setScale(scale * 1.5, in: proxy.size)
           } label: {
             Image(systemName: "plus.magnifyingglass")
+              .frame(width: 44, height: 44)
           }
           .accessibilityLabel("Zoom In")
           Button("Reset", systemImage: "arrow.counterclockwise", action: resetView)
             .labelStyle(.iconOnly)
+            .frame(width: 44, height: 44)
             .accessibilityLabel("Reset Zoom and Position")
           if onSelectFocus != nil {
             Button {
@@ -509,11 +561,12 @@ private struct ZoomableImageViewer: View {
                 at: CGPoint(x: proxy.size.width / 2, y: proxy.size.height / 2), in: proxy.size)
             } label: {
               Image(systemName: "scope")
+                .frame(width: 44, height: 44)
             }
             .accessibilityLabel("Use View Center as Project Focus")
           }
         }
-        .font(.title3)
+        .font(.system(size: 20))
         .foregroundStyle(.white)
         .padding(.horizontal, 18)
         .padding(.vertical, 10)

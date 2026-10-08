@@ -19,7 +19,9 @@ struct PreparedCollageExport: Identifiable {
 }
 
 enum CollageRenderer {
-  static let maximumPixelCount: CGFloat = 70_000_000
+  // A single 70 MP RGBA canvas consumes roughly 280 MB before source decoding and encoding.
+  // Keep mobile exports below 100 MB for the primary bitmap; Flow layouts are scaled visibly.
+  static let maximumPixelCount: CGFloat = 24_000_000
   static let maximumSide: CGFloat = 32_000
   static let previewMaximumPixelCount: CGFloat = 8_000_000
   static let previewMaximumSide: CGFloat = 12_000
@@ -304,7 +306,7 @@ enum CollageRenderer {
   ) throws -> URL {
     let fileName = CollageExportFileName.make(
       collectionName: collectionName,
-      projectName: project.name,
+      projectName: project.displayName,
       format: project.outputFormat,
       date: date
     )

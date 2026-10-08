@@ -13,7 +13,9 @@ enum LayoutFamily: String, CaseIterable, Identifiable {
 
   var id: String { rawValue }
 
-  static let browserCases: [LayoutFamily] = [.smart, .grid, .hero, .mosaic, .slanted, .flow]
+  static let browserCases: [LayoutFamily] = [
+    .smart, .grid, .hero, .mosaic, .slanted, .flow, .custom,
+  ]
 
   var browserFamily: LayoutFamily {
     self == .editorial ? .hero : self
@@ -508,7 +510,7 @@ enum LayoutCatalog {
       ]
 
     case .custom:
-      return []
+      return [customTemplate(photoCount: count)]
     }
   }
 

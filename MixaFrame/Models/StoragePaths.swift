@@ -27,6 +27,14 @@ struct StoragePaths: Sendable {
     rootDirectory.appendingPathComponent("ProjectThumbnails", isDirectory: true)
   }
 
+  var draftDirectory: URL {
+    rootDirectory.appendingPathComponent("Drafts", isDirectory: true)
+  }
+
+  func draftURL(projectID: UUID) -> URL {
+    draftDirectory.appendingPathComponent("\(projectID.uuidString).json")
+  }
+
   var collectionsDatabaseURL: URL {
     rootDirectory.appendingPathComponent("collections.json")
   }
@@ -43,6 +51,7 @@ struct StoragePaths: Sendable {
       previewDirectory,
       thumbnailDirectory,
       projectThumbnailDirectory,
+      draftDirectory,
     ] {
       try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
     }

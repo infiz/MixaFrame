@@ -6,7 +6,76 @@ import ImageIO
 import SDWebImageWebPCoder
 import UniformTypeIdentifiers
 
+struct MacPreparedCollageExport: Identifiable {
+  let id = UUID()
+  let fileURL: URL
+  let previewImage: NSImage
+  let requestedSize: CGSize
+  let renderedSize: CGSize
+  let includesWatermark: Bool
+
+  var wasScaledForSafety: Bool {
+    abs(requestedSize.width - renderedSize.width) > 0.5
+      || abs(requestedSize.height - renderedSize.height) > 0.5
+  }
+}
+
 enum MacCollageRenderer {
+  static func prepareExport(
+    project: Project,
+    photoDirectory: URL,
+    includesWatermark: Bool
+  ) throws -> MacPreparedCollageExport {
+    let requestedSize = LayoutEngine.outputSize(for: project)
+    let renderedSize = safeOutputSize(requestedSize)
+    let fileURL = FileManager.default.temporaryDirectory
+      .appendingPathComponent("MixaFrame-\(UUID().uuidString)")
+      .appendingPathExtension(project.outputFormat.fileExtension)
+    try export(
+      project: project,
+      photoDirectory: photoDirectory,
+      destination: fileURL,
+      includesWatermark: includesWatermark
+    )
+    guard let previewImage = boundedPreviewImage(at: fileURL, renderedSize: renderedSize) else {
+      try? FileManager.default.removeItem(at: fileURL)
+      throw MacCollageRenderError.renderingFailed
+    }
+    return MacPreparedCollageExport(
+      fileURL: fileURL,
+      previewImage: previewImage,
+      requestedSize: requestedSize,
+      renderedSize: renderedSize,
+      includesWatermark: includesWatermark
+    )
+  }
+
+  static func renderedOutputSize(for project: Project) -> CGSize {
+    safeOutputSize(LayoutEngine.outputSize(for: project))
+  }
+
+  private static func boundedPreviewImage(at url: URL, renderedSize: CGSize) -> NSImage? {
+    let maximumPixels: CGFloat = 8_000_000
+    let maximumSide: CGFloat = 12_000
+    let pixelScale = sqrt(maximumPixels / max(1, renderedSize.width * renderedSize.height))
+    let sideScale = maximumSide / max(renderedSize.width, renderedSize.height, 1)
+    let scale = min(1, pixelScale, sideScale)
+    let maximumPixelSize = max(
+      1,
+      Int(ceil(max(renderedSize.width, renderedSize.height) * scale))
+    )
+    guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+    let options: [CFString: Any] = [
+      kCGImageSourceCreateThumbnailFromImageAlways: true,
+      kCGImageSourceCreateThumbnailWithTransform: true,
+      kCGImageSourceThumbnailMaxPixelSize: maximumPixelSize,
+      kCGImageSourceShouldCacheImmediately: true,
+    ]
+    guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
+    else { return nil }
+    return NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height))
+  }
+
   static func export(
     project: Project,
     photoDirectory: URL,

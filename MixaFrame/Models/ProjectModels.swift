@@ -45,6 +45,11 @@ struct Project: Identifiable, Codable, Hashable {
     name
   }
 
+  var displayName: String {
+    let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+    return trimmed.isEmpty ? "Untitled Project" : trimmed
+  }
+
   var background: CollageBackground {
     get { CollageBackground(rawValue: backgroundHex.uppercased()) ?? .white }
     set { backgroundHex = newValue.rawValue }
@@ -80,6 +85,54 @@ struct Project: Identifiable, Codable, Hashable {
       name: "",
       cornerRadiusPercent: 0
     )
+  }
+}
+
+struct RecoverableProjectDraft: Identifiable, Codable, Hashable {
+  var id: UUID { project.id }
+  let savedAt: Date
+  let project: Project
+}
+
+@MainActor
+final class ProjectUndoHistory: ObservableObject {
+  weak var undoManager: UndoManager?
+  var onApply: ((Project) -> Void)?
+  private(set) var isApplyingHistory = false
+
+  func connect(undoManager: UndoManager?, onApply: @escaping (Project) -> Void) {
+    self.undoManager = undoManager
+    self.onApply = onApply
+  }
+
+  func record(previous: Project, current: Project, actionName: String = "Edit Project") {
+    guard !isApplyingHistory,
+      previous.editorState != current.editorState,
+      let undoManager
+    else { return }
+
+    undoManager.registerUndo(withTarget: self) { history in
+      history.apply(snapshot: previous, inverse: current, actionName: actionName)
+    }
+    undoManager.setActionName(actionName)
+  }
+
+  func reset() {
+    undoManager?.removeAllActions(withTarget: self)
+  }
+
+  private func apply(snapshot: Project, inverse: Project, actionName: String) {
+    guard let undoManager else { return }
+    isApplyingHistory = true
+    onApply?(snapshot)
+    undoManager.registerUndo(withTarget: self) { history in
+      history.apply(snapshot: inverse, inverse: snapshot, actionName: actionName)
+    }
+    undoManager.setActionName(actionName)
+    Task { @MainActor [weak self] in
+      await Task.yield()
+      self?.isApplyingHistory = false
+    }
   }
 }
 

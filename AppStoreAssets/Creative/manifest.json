@@ -1,0 +1,48 @@
+[
+  {
+    "file": "MixaFrame-Header-3840x1646.png",
+    "size": [
+      3840,
+      1646
+    ],
+    "mode": "RGB",
+    "color_space": "sRGB",
+    "alpha": false,
+    "source_size": [
+      1916,
+      821
+    ],
+    "resampled": true,
+    "bytes": 3591499,
+    "sha256": "b3b3ded1aa2ef53cd472f808b8d942ec933b2ae283b39252061c608435c7afc6",
+    "art_safe_area": [
+      1097,
+      493,
+      2743,
+      1154
+    ]
+  },
+  {
+    "file": "MixaFrame-Search-Results-3840x2560.png",
+    "size": [
+      3840,
+      2560
+    ],
+    "mode": "RGB",
+    "color_space": "sRGB",
+    "alpha": false,
+    "source_size": [
+      1536,
+      1024
+    ],
+    "resampled": true,
+    "bytes": 4759530,
+    "sha256": "dce2fb795be0543daf3cb9e3c07dc17d792e3ae93dfe0201ec480051774a539c",
+    "art_safe_area": [
+      836,
+      765,
+      3004,
+      1795
+    ]
+  }
+]

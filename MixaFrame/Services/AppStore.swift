@@ -34,10 +34,23 @@ private actor AsyncPermitPool {
   }
 }
 
+private struct PortableProjectPhoto: Codable {
+  let sourcePhotoID: UUID
+  let data: Data
+}
+
+private struct PortableProjectPackage: Codable {
+  let version: Int
+  let project: Project
+  let photos: [PortableProjectPhoto]
+}
+
 @MainActor
 final class AppStore: ObservableObject {
+  let reviewPromptPolicy = ReviewPromptPolicy()
   @Published private(set) var collections: [Collection] = []
   @Published private(set) var savedCustomLayouts: [SavedCustomLayout] = []
+  @Published private(set) var recoverableDrafts: [RecoverableProjectDraft] = []
   @Published private(set) var isLoaded = false
   @Published var alertMessage: String?
   @Published private(set) var imageCacheRevision = 0
@@ -122,6 +135,124 @@ final class AppStore: ObservableObject {
 
   func collection(id: UUID) -> Collection? {
     collections.first { $0.id == id }
+  }
+
+  func recoverableDraft(projectID: UUID) -> RecoverableProjectDraft? {
+    recoverableDrafts.first { $0.id == projectID }
+  }
+
+  func recoverableDrafts(collectionID: UUID) -> [RecoverableProjectDraft] {
+    recoverableDrafts
+      .filter { $0.project.collectionID == collectionID }
+      .sorted { $0.savedAt > $1.savedAt }
+  }
+
+  func persistDraft(_ project: Project) async {
+    let draft = RecoverableProjectDraft(savedAt: Date(), project: project)
+    let destination = storagePaths.draftURL(projectID: project.id)
+    do {
+      try await Task.detached(priority: .utility) {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(draft)
+        try data.write(to: destination, options: .atomic)
+      }.value
+      recoverableDrafts.removeAll { $0.id == project.id }
+      recoverableDrafts.append(draft)
+    } catch {
+      alertMessage = "The recovery copy could not be saved: \(error.localizedDescription)"
+    }
+  }
+
+  func discardDraft(projectID: UUID, removesUncommittedAssets: Bool = false) async {
+    let draft = recoverableDraft(projectID: projectID)
+    recoverableDrafts.removeAll { $0.id == projectID }
+    let destination = storagePaths.draftURL(projectID: projectID)
+    await Task.detached(priority: .utility) {
+      try? FileManager.default.removeItem(at: destination)
+    }.value
+    if removesUncommittedAssets, let draft {
+      await discardUnsavedProjectFiles(from: draft.project)
+    }
+  }
+
+  func createPortableProjectFile(for project: Project) async throws -> URL {
+    try await restoreOriginalsIfNeeded(for: project.photos)
+    let sources = project.photos.map { photo in
+      (photo.id, imageURL(for: photo))
+    }
+    let package = try await Task.detached(priority: .userInitiated) {
+      let photos = try sources.map { source in
+        PortableProjectPhoto(
+          sourcePhotoID: source.0,
+          data: try Data(contentsOf: source.1, options: .mappedIfSafe)
+        )
+      }
+      return PortableProjectPackage(version: 1, project: project, photos: photos)
+    }.value
+    let safeName = project.displayName
+      .replacingOccurrences(of: "/", with: "-")
+      .replacingOccurrences(of: ":", with: "-")
+    let destination = FileManager.default.temporaryDirectory
+      .appendingPathComponent(safeName.isEmpty ? "MixaFrame Project" : safeName)
+      .appendingPathExtension("mixaframe")
+    try await Task.detached(priority: .utility) {
+      let encoder = PropertyListEncoder()
+      encoder.outputFormat = .binary
+      try encoder.encode(package).write(to: destination, options: .atomic)
+    }.value
+    return destination
+  }
+
+  func importPortableProject(from sourceURL: URL, into collectionID: UUID) async throws -> Project {
+    guard collection(id: collectionID) != nil else { throw AppError.persistenceFailed }
+    let package = try await Task.detached(priority: .userInitiated) {
+      let values = try sourceURL.resourceValues(forKeys: [.fileSizeKey])
+      if let fileSize = values.fileSize, fileSize > 1_000_000_000 {
+        throw AppError.invalidImage
+      }
+      let decoder = PropertyListDecoder()
+      return try decoder.decode(
+        PortableProjectPackage.self,
+        from: Data(contentsOf: sourceURL, options: .mappedIfSafe)
+      )
+    }.value
+    guard package.version == 1, (1...12).contains(package.project.photos.count) else {
+      throw AppError.persistenceFailed
+    }
+    let dataByPhotoID = Dictionary(uniqueKeysWithValues: package.photos.map {
+      ($0.sourcePhotoID, $0.data)
+    })
+    var importedProject = package.project
+    importedProject.id = UUID()
+    importedProject.collectionID = collectionID
+    importedProject.createdAt = Date()
+    importedProject.modifiedAt = Date()
+    importedProject.latestExportFileName = nil
+    importedProject.exportedPhotoLibraryAssetIdentifier = nil
+    importedProject.savedCustomLayoutID = nil
+    importedProject.photos = []
+
+    do {
+      for sourcePhoto in package.project.photos {
+        guard let data = dataByPhotoID[sourcePhoto.id] else { throw AppError.imageMissing }
+        var imported = try await importPhotoData(data)
+        imported.focalX = sourcePhoto.focalX
+        imported.focalY = sourcePhoto.focalY
+        imported.focusSource = sourcePhoto.focusSource
+        imported.detectedFocusArea = sourcePhoto.detectedFocusArea
+        imported.hasCompletedFocusDetection = sourcePhoto.hasCompletedFocusDetection
+        imported.zoom = sourcePhoto.zoom
+        importedProject.photos.append(imported)
+      }
+      guard let saved = await saveProject(importedProject) else {
+        throw AppError.persistenceFailed
+      }
+      return saved
+    } catch {
+      await discardUnsavedProjectFiles(from: importedProject)
+      throw error
+    }
   }
 
   func createCollection(name: String) async -> UUID {
@@ -568,10 +699,31 @@ final class AppStore: ObservableObject {
           && layout.frames.count == layout.photoCount
           && layout.frames.allSatisfy(\.isValid)
       }
+      recoverableDrafts = await loadRecoverableDrafts()
     } catch {
       alertMessage = "Saved collections could not be loaded: \(error.localizedDescription)"
     }
     isLoaded = true
+  }
+
+  private func loadRecoverableDrafts() async -> [RecoverableProjectDraft] {
+    let directory = storagePaths.draftDirectory
+    return await Task.detached(priority: .utility) {
+      let fileManager = FileManager.default
+      let urls = (try? fileManager.contentsOfDirectory(
+        at: directory,
+        includingPropertiesForKeys: nil,
+        options: [.skipsHiddenFiles]
+      )) ?? []
+      let decoder = JSONDecoder()
+      decoder.dateDecodingStrategy = .iso8601
+      return urls.compactMap { url in
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        return try? decoder.decode(RecoverableProjectDraft.self, from: data)
+      }
+      .filter { !$0.project.photos.isEmpty || !$0.project.name.isEmpty }
+      .sorted { $0.savedAt > $1.savedAt }
+    }.value
   }
 
   private func cleanUpUnreferencedAssets(for project: Project) async {

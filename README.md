@@ -10,6 +10,8 @@ MixaFrame is a native SwiftUI photo collage editor for iPhone, iPad, and Mac. Co
 4. Select an iPhone or iPad simulator, or connect and unlock a device and select it as the run destination.
 5. Press **Run** (`⌘R`). On first use, allow access when saving a project to Photos.
 
+The iPhone Duo interface adapts to the current window size across folded, partially open, and fully open postures. Landscape editing places tools beside the canvas; portrait editing stacks them below it. Accessibility text sizes use wrapping labels and scrollable panels and sheets. See [Duo simulator validation](docs/iphone_duo_validation.md).
+
 The deployment target is iOS 17.6. The iPad interface uses adaptive collection and project grids, a larger canvas, and full-height editing controls in portrait, landscape, Split View, and Stage Manager sizes. Xcode resolves the MIT-licensed `SDWebImageWebPCoder` Swift package (and its libwebp dependency) for WebP encoding; the app uses no network services at runtime.
 
 ## Run on Mac
@@ -58,6 +60,7 @@ MixaFrame follows the same shared-core arrangement as MementoReel. `ProjectModel
 - Save to Photos and standard iOS sharing/Save to Files.
 - A full-screen export review with pinch zoom, pan, explicit zoom controls, and reset before Save to Photos or sharing.
 - Full-screen inspection of any original-resolution source photo from the editor via double-tap or an explicit action, with pinch zoom, pan, zoom controls, and reset.
+- Native App Store rating requests after three completed editing visits with a saved change or export and at least two photos. Requests wait until the project browser is idle, occur at most once per app version, and require 120 days plus three additional completed visits before another request. Apple controls whether the prompt appears.
 
 ## Verification
 
