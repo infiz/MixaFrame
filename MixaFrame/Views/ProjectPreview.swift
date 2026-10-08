@@ -91,7 +91,7 @@ struct ProjectPreview: View {
     }
     .animation(.easeInOut(duration: 0.2), value: project.layoutID)
     .animation(.easeInOut(duration: 0.2), value: project.canvas)
-    .accessibilityLabel("Project preview with \(project.photos.count) photos")
+    .accessibilityElement(children: .contain)
   }
 }
 
@@ -106,12 +106,13 @@ struct ProjectThumbnail: View {
       let canvasSize = aspectFitSize(content: outputSize, container: proxy.size)
 
       ZStack {
-        Color(uiColor: .tertiarySystemBackground)
+        Color.black.opacity(0.9)
         if let persistedImage {
           Image(uiImage: persistedImage)
             .resizable()
             .scaledToFit()
-            .frame(width: canvasSize.width, height: canvasSize.height)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding(4)
         } else {
           PassiveCollageCanvas(project: project, displaySize: canvasSize, imageLoader: imageLoader)
             .frame(width: canvasSize.width, height: canvasSize.height)
@@ -227,6 +228,8 @@ private struct CollageCanvasContent: View {
           let frame = sourceFrame.scaled(x: scaleX, y: scaleY)
           InteractivePhotoFrame(
             photo: photo,
+            position: index + 1,
+            totalCount: project.photos.count,
             image: imageLoader(photo),
             isDropTarget: swapTargetPhotoID == photo.id,
             usesAspectFit: sourceLayoutFrame.usesAspectFit,
@@ -237,6 +240,14 @@ private struct CollageCanvasContent: View {
             usesFlowDragAndDrop: LayoutEngine.isFlowLayout(project),
             isFlowPhotoSelected: selectedFlowPhotoID == photo.id,
             onViewPhoto: { onViewPhoto(photo.id) },
+            onMoveEarlier: {
+              guard index > 0 else { return }
+              onMovePhoto(photo.id, project.photos[index - 1].id)
+            },
+            onMoveLater: {
+              guard index + 1 < project.photos.count else { return }
+              onMovePhoto(photo.id, project.photos[index + 1].id)
+            },
             onSelectFlowPhoto: {
               selectedFlowPhotoID = selectedFlowPhotoID == photo.id ? nil : photo.id
             },
@@ -455,6 +466,9 @@ private struct LayoutDividerHandle: View {
         divider.axis == .horizontal ? "Resize adjacent rows" : "Resize adjacent columns"
       )
       .accessibilityHint("Drag to change the neighboring photo frame sizes")
+      .accessibilityAdjustableAction { direction in
+        onMove(sourceDivider, direction == .increment ? 12 : -12)
+      }
   }
 
   private var dividerPath: Path {
@@ -491,6 +505,8 @@ private struct LayoutDividerHandle: View {
 
 private struct InteractivePhotoFrame: View {
   let photo: CollagePhoto
+  let position: Int
+  let totalCount: Int
   let image: UIImage?
   let isDropTarget: Bool
   let usesAspectFit: Bool
@@ -501,6 +517,8 @@ private struct InteractivePhotoFrame: View {
   let usesFlowDragAndDrop: Bool
   let isFlowPhotoSelected: Bool
   let onViewPhoto: () -> Void
+  let onMoveEarlier: () -> Void
+  let onMoveLater: () -> Void
   let onSelectFlowPhoto: () -> Void
   let onBeginFlowSwap: () -> Void
   let onDropPhoto: (UUID) -> Void
@@ -578,6 +596,15 @@ private struct InteractivePhotoFrame: View {
           ? "Double tap to view the original photo. Drag onto another photo to swap."
           : "Double tap to view the original photo. Drag to reposition, move onto another photo to swap, or pinch to zoom."
     )
+    .accessibilityLabel("Photo \(position) of \(totalCount)")
+    .accessibilityValue("\(photo.pixelWidth) by \(photo.pixelHeight) pixels")
+    .accessibilityAction(named: "View Original", onViewPhoto)
+    .accessibilityAction(named: "Move Earlier", onMoveEarlier)
+    .accessibilityAction(named: "Move Later", onMoveLater)
+    .accessibilityAdjustableAction { direction in
+      let increment = direction == .increment ? 0.25 : -0.25
+      onAdjustZoom(min(4, max(1, photo.effectiveZoom + increment)))
+    }
 
     if usesFlowDragAndDrop {
       Group {

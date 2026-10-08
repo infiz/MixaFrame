@@ -1,21 +1,66 @@
 import SwiftUI
 import UIKit
 
+enum LibrarySortCriterion: String, CaseIterable, Identifiable {
+  case modified
+  case name
+
+  var id: String { rawValue }
+  var title: String { self == .modified ? "Date Modified" : "Name" }
+}
+
+enum LibrarySortDirection: String, CaseIterable, Identifiable {
+  case ascending
+  case descending
+
+  var id: String { rawValue }
+  var title: String { self == .ascending ? "Ascending" : "Descending" }
+  var symbol: String { self == .ascending ? "arrow.up" : "arrow.down" }
+}
+
+struct LibrarySortDescriptor {
+  var criterion: LibrarySortCriterion = .modified
+  var direction: LibrarySortDirection = .descending
+
+  func sorted<T>(_ values: [T], name: (T) -> String, modifiedAt: (T) -> Date) -> [T] {
+    values.sorted { lhs, rhs in
+      switch criterion {
+      case .modified:
+        return direction == .ascending
+          ? modifiedAt(lhs) < modifiedAt(rhs)
+          : modifiedAt(lhs) > modifiedAt(rhs)
+      case .name:
+        let comparison = name(lhs).localizedStandardCompare(name(rhs))
+        return direction == .ascending
+          ? comparison == .orderedAscending
+          : comparison == .orderedDescending
+      }
+    }
+  }
+}
+
 struct CollectionListView: View {
   @EnvironmentObject private var store: AppStore
   @EnvironmentObject private var subscriptions: SubscriptionStore
-  @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+  @Environment(\.dynamicTypeSize) private var dynamicTypeSize
   @State private var showingNewCollection = false
   @State private var newCollectionName = ""
   @State private var collectionToDelete: Collection?
   @State private var collectionToRename: Collection?
   @State private var renameText = ""
   @State private var showingSubscription = false
+  @State private var searchText = ""
+  @State private var sort = LibrarySortDescriptor()
 
   private let expandedHorizontalMargin: CGFloat = 24
-  private let expandedGridColumns = [
-    GridItem(.adaptive(minimum: 260, maximum: 380), spacing: 20, alignment: .top)
-  ]
+  private func expandedGridColumns(for width: CGFloat) -> [GridItem] {
+    [
+      GridItem(
+        .adaptive(minimum: min(max(1, width - 48),
+          dynamicTypeSize.isAccessibilitySize ? 360 : 260)),
+        spacing: 20, alignment: .top)
+    ]
+  }
 
   var body: some View {
     NavigationStack {
@@ -23,18 +68,23 @@ struct CollectionListView: View {
         if !store.isLoaded {
           ProgressView("Loading collections…")
         } else {
-          GeometryReader { _ in
+          GeometryReader { proxy in
+            let usesExpandedLayout = proxy.size.width >= 600 || dynamicTypeSize.isAccessibilitySize
             ScrollView {
               Group {
                 if usesExpandedLayout {
                   LazyVGrid(
-                    columns: expandedGridColumns,
+                    columns: expandedGridColumns(for: proxy.size.width),
                     alignment: .leading,
                     spacing: 20
                   ) {
                     CollectionCreationCard(isExpanded: true) { showingNewCollection = true }
 
-                    ForEach(store.collections) { collection in
+                    if store.collections.isEmpty {
+                      CollectionWelcomeCard(isExpanded: true)
+                    }
+
+                    ForEach(displayedCollections) { collection in
                       NavigationLink {
                         CollectionDetailView(collectionID: collection.id)
                       } label: {
@@ -69,7 +119,11 @@ struct CollectionListView: View {
                   LazyVStack(spacing: 10) {
                     CollectionCreationCard(isExpanded: false) { showingNewCollection = true }
 
-                    ForEach(store.collections) { collection in
+                    if store.collections.isEmpty {
+                      CollectionWelcomeCard(isExpanded: false)
+                    }
+
+                    ForEach(displayedCollections) { collection in
                       NavigationLink {
                         CollectionDetailView(collectionID: collection.id)
                       } label: {
@@ -105,7 +159,11 @@ struct CollectionListView: View {
       .frame(maxWidth: .infinity, maxHeight: .infinity)
       .navigationTitle("MixaFrame")
       .navigationBarTitleDisplayMode(.inline)
+      .searchable(text: $searchText, prompt: "Search Collections")
       .toolbar {
+        ToolbarItem(placement: .topBarLeading) {
+          librarySortMenu
+        }
         ToolbarItem(placement: .topBarTrailing) {
           Button {
             showingSubscription = true
@@ -186,8 +244,29 @@ struct CollectionListView: View {
     Binding(get: { collectionToRename != nil }, set: { if !$0 { collectionToRename = nil } })
   }
 
-  private var usesExpandedLayout: Bool {
-    horizontalSizeClass == .regular
+  private var displayedCollections: [Collection] {
+    let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+    let filtered = query.isEmpty
+      ? store.collections
+      : store.collections.filter { $0.name.localizedCaseInsensitiveContains(query) }
+    return sort.sorted(filtered, name: \.name, modifiedAt: \.modifiedAt)
+  }
+
+  private var librarySortMenu: some View {
+    Menu {
+      Picker("Sort By", selection: $sort.criterion) {
+        ForEach(LibrarySortCriterion.allCases) { criterion in
+          Text(criterion.title).tag(criterion)
+        }
+      }
+      Picker("Order", selection: $sort.direction) {
+        ForEach(LibrarySortDirection.allCases) { direction in
+          Label(direction.title, systemImage: direction.symbol).tag(direction)
+        }
+      }
+    } label: {
+      Label("Sort Collections", systemImage: "arrow.up.arrow.down")
+    }
   }
 
   private var deletePresented: Binding<Bool> {
@@ -209,6 +288,31 @@ struct CollectionListView: View {
       from: nil,
       for: nil
     )
+  }
+}
+
+private struct CollectionWelcomeCard: View {
+  let isExpanded: Bool
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 12) {
+      Label("Create your first collage", systemImage: "sparkles.rectangle.stack")
+        .font(isExpanded ? .title3.bold() : .headline)
+        .foregroundStyle(.indigo)
+      Text("1. Create a collection  2. Add 2–12 photos  3. Pick a layout and export")
+        .font(.subheadline)
+        .foregroundStyle(.secondary)
+      Text("Smart Layout automatically chooses a strong starting composition and keeps detected subjects in view.")
+        .font(.caption)
+        .foregroundStyle(.secondary)
+    }
+    .padding(18)
+    .frame(maxWidth: isExpanded ? 380 : 460, alignment: .leading)
+    .background(.indigo.opacity(0.08), in: RoundedRectangle(cornerRadius: 18))
+    .overlay {
+      RoundedRectangle(cornerRadius: 18).stroke(.indigo.opacity(0.18))
+    }
+    .accessibilityElement(children: .combine)
   }
 }
 
@@ -282,11 +386,13 @@ private struct CollectionCreationCard: View {
         .font(.caption)
         .foregroundStyle(.tertiary)
     }
+    .fixedSize(horizontal: false, vertical: true)
     .frame(maxWidth: .infinity, alignment: .leading)
   }
 }
 
 private struct CollectionCard: View {
+  @Environment(\.dynamicTypeSize) private var dynamicTypeSize
   let collection: Collection
   let thumbnail: UIImage?
 
@@ -326,7 +432,7 @@ private struct CollectionCard: View {
       VStack(alignment: .leading, spacing: 7) {
         Text(collection.name)
           .font(.title3.bold())
-          .lineLimit(1)
+          .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
         Text("\(collection.projects.count) project\(collection.projects.count == 1 ? "" : "s")")
           .font(.subheadline)
           .foregroundStyle(.secondary)
@@ -334,6 +440,7 @@ private struct CollectionCard: View {
           .font(.caption)
           .foregroundStyle(.tertiary)
       }
+      .fixedSize(horizontal: false, vertical: true)
       .padding(16)
       .frame(maxWidth: .infinity, alignment: .leading)
     }

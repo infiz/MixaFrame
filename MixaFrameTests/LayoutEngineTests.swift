@@ -5,7 +5,191 @@ import XCTest
 
 @testable import MixaFrame
 
+@MainActor
+final class ReviewPromptPolicyTests: XCTestCase {
+  private func withPolicy(_ body: (ReviewPromptPolicy, UserDefaults) -> Void) throws {
+    let suiteName = "MixaFrame.ReviewPromptTests.\(UUID().uuidString)"
+    let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+    defer { defaults.removePersistentDomain(forName: suiteName) }
+    body(ReviewPromptPolicy(defaults: defaults), defaults)
+  }
+
+  func testRequestsOnlyAfterThreeCompletedUsages() async throws {
+    try withPolicy { policy, _ in
+      XCTAssertFalse(policy.consumeRequestOpportunity(version: "1.0"))
+      for _ in 0..<2 { policy.recordCompletedUsage() }
+      XCTAssertFalse(policy.consumeRequestOpportunity(version: "1.0"))
+      policy.recordCompletedUsage()
+      XCTAssertTrue(policy.consumeRequestOpportunity(version: "1.0"))
+      XCTAssertFalse(policy.consumeRequestOpportunity(version: "1.0"))
+    }
+  }
+
+  func testUsageCountPersistsAcrossLaunches() async throws {
+    try withPolicy { policy, defaults in
+      for _ in 0..<2 { policy.recordCompletedUsage() }
+      let relaunched = ReviewPromptPolicy(defaults: defaults)
+      XCTAssertEqual(relaunched.completedUsages, 2)
+      relaunched.recordCompletedUsage()
+      XCTAssertTrue(relaunched.consumeRequestOpportunity(version: "1.0"))
+    }
+  }
+
+  func testDoesNotRequestAgainForSameVersionAfterCooldown() async throws {
+    try withPolicy { policy, defaults in
+      let now = Date(timeIntervalSince1970: 1_000_000)
+      for _ in 0..<3 { policy.recordCompletedUsage() }
+      XCTAssertTrue(policy.consumeRequestOpportunity(version: "1.0", now: now))
+      for _ in 0..<3 { policy.recordCompletedUsage() }
+      let relaunched = ReviewPromptPolicy(defaults: defaults)
+      XCTAssertFalse(relaunched.consumeRequestOpportunity(
+        version: "1.0", now: now.addingTimeInterval(ReviewPromptPolicy.cooldown + 1)))
+    }
+  }
+
+  func testNewVersionStillRequiresCooldown() async throws {
+    try withPolicy { policy, _ in
+      let now = Date(timeIntervalSince1970: 1_000_000)
+      for _ in 0..<3 { policy.recordCompletedUsage() }
+      XCTAssertTrue(policy.consumeRequestOpportunity(version: "1.0", now: now))
+      for _ in 0..<3 { policy.recordCompletedUsage() }
+      XCTAssertFalse(policy.consumeRequestOpportunity(
+        version: "1.1", now: now.addingTimeInterval(ReviewPromptPolicy.cooldown - 1)))
+      XCTAssertTrue(policy.consumeRequestOpportunity(
+        version: "1.1", now: now.addingTimeInterval(ReviewPromptPolicy.cooldown)))
+    }
+  }
+
+  func testNewVersionRequiresThreeMoreUsages() async throws {
+    try withPolicy { policy, _ in
+      let now = Date(timeIntervalSince1970: 1_000_000)
+      for _ in 0..<3 { policy.recordCompletedUsage() }
+      XCTAssertTrue(policy.consumeRequestOpportunity(version: "1.0", now: now))
+      let later = now.addingTimeInterval(ReviewPromptPolicy.cooldown)
+      for _ in 0..<2 { policy.recordCompletedUsage() }
+      XCTAssertFalse(policy.consumeRequestOpportunity(version: "1.1", now: later))
+      policy.recordCompletedUsage()
+      XCTAssertTrue(policy.consumeRequestOpportunity(version: "1.1", now: later))
+    }
+  }
+
+  func testMissingVersionDoesNotConsumeOpportunity() async throws {
+    try withPolicy { policy, _ in
+      for _ in 0..<3 { policy.recordCompletedUsage() }
+      XCTAssertFalse(policy.consumeRequestOpportunity(version: ""))
+      XCTAssertTrue(policy.consumeRequestOpportunity(version: "1.0"))
+    }
+  }
+}
+
 final class LayoutEngineTests: XCTestCase {
+  func testDuoWorkspaceFitsEveryPostureAndTextSize() {
+    // Closed/open portrait and landscape, plus a narrow resized window.
+    let sizes = [CGSize(width: 466, height: 560), CGSize(width: 669, height: 830),
+                 CGSize(width: 951, height: 560), CGSize(width: 678, height: 350),
+                 CGSize(width: 320, height: 480)]
+    for size in sizes {
+      for largeText in [false, true] {
+        for square in [false, true] {
+          let layout = EditorWorkspaceLayout(size: size, controlsHidden: false,
+            squareCanvas: square, accessibilityText: largeText)
+          XCTAssertGreaterThan(layout.previewHeight, 0)
+          XCTAssertGreaterThan(layout.settingsHeight, 100)
+          XCTAssertLessThanOrEqual(layout.panelWidth, size.width)
+          if layout.usesSideBySide {
+            XCTAssertLessThanOrEqual(layout.previewWidth + layout.panelWidth + 80, size.width)
+            XCTAssertLessThanOrEqual(layout.settingsHeight + 16, size.height)
+          } else {
+            XCTAssertLessThanOrEqual(layout.previewHeight + layout.settingsHeight + 88, size.height)
+          }
+        }
+      }
+    }
+  }
+
+  func testFullCanvasUsesAvailableHeightForFlowAndRegularLayouts() {
+    let layout = EditorWorkspaceLayout(size: CGSize(width: 951, height: 560),
+      controlsHidden: true, squareCanvas: false, accessibilityText: true)
+    XCTAssertFalse(layout.usesSideBySide)
+    XCTAssertEqual(layout.previewWidth, 951)
+    XCTAssertEqual(layout.previewHeight, 548)
+    XCTAssertEqual(layout.settingsHeight, 0)
+  }
+
+  func testBlankProjectNameUsesFriendlyDisplayName() {
+    var project = Project.new(collectionID: UUID())
+    project.name = "  \n "
+
+    XCTAssertEqual(project.displayName, "Untitled Project")
+  }
+
+  @MainActor
+  func testRecoverableDraftPersistsAndCanBeDiscarded() async {
+    let directory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("MixaFrameDraftTests-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    var project = Project.new(collectionID: UUID())
+    project.name = "Recovery Test"
+    let writer = AppStore(rootDirectory: directory)
+    await writer.waitUntilLoaded()
+    await writer.persistDraft(project)
+
+    let reader = AppStore(rootDirectory: directory)
+    await reader.waitUntilLoaded()
+    XCTAssertEqual(reader.recoverableDraft(projectID: project.id)?.project.editorState, project.editorState)
+
+    await reader.discardDraft(projectID: project.id)
+    let finalStore = AppStore(rootDirectory: directory)
+    await finalStore.waitUntilLoaded()
+    XCTAssertNil(finalStore.recoverableDraft(projectID: project.id))
+  }
+
+  @MainActor
+  func testPortableProjectRoundTripIncludesOriginalPhotosAndSettings() async throws {
+    let directory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("MixaFramePortableProjectTests-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    let store = AppStore(rootDirectory: directory)
+    await store.waitUntilLoaded()
+    let collectionID = await store.createCollection(name: "Transfers")
+    let image = UIGraphicsImageRenderer(size: CGSize(width: 320, height: 240)).image { context in
+      UIColor.systemMint.setFill()
+      context.fill(CGRect(x: 0, y: 0, width: 320, height: 240))
+    }
+    let imageData = try XCTUnwrap(image.jpegData(compressionQuality: 0.9))
+    var first = try await store.importPhotoData(imageData)
+    first.focalX = 0.25
+    first.zoom = 1.5
+    let second = try await store.importPhotoData(imageData)
+    var project = Project.new(collectionID: collectionID)
+    project.name = "Portable Pair"
+    project.photos = [first, second]
+    project.spacing = 17
+    project.background = .dark
+    let savedProject = await store.saveProject(project)
+    project = try XCTUnwrap(savedProject)
+
+    let packageURL = try await store.createPortableProjectFile(for: project)
+    defer { try? FileManager.default.removeItem(at: packageURL) }
+    XCTAssertEqual(packageURL.pathExtension, "mixaframe")
+
+    let imported = try await store.importPortableProject(from: packageURL, into: collectionID)
+    XCTAssertNotEqual(imported.id, project.id)
+    XCTAssertEqual(imported.displayName, "Portable Pair")
+    XCTAssertEqual(imported.photos.count, 2)
+    XCTAssertEqual(imported.spacing, 17)
+    XCTAssertEqual(imported.background, .dark)
+    XCTAssertEqual(imported.photos[0].focalX, 0.25)
+    XCTAssertEqual(imported.photos[0].zoom, 1.5)
+    XCTAssertTrue(
+      imported.photos.allSatisfy {
+        FileManager.default.fileExists(atPath: store.imageURL(for: $0).path)
+      }
+    )
+  }
+
   @MainActor
   func testSharedAppStorePersistsCollectionsAcrossInstances() async {
     let directory = FileManager.default.temporaryDirectory
@@ -112,13 +296,18 @@ final class LayoutEngineTests: XCTestCase {
     XCTAssertEqual(LayoutEngine.outputSize(for: project), CGSize(width: 4096, height: 4096))
   }
 
-  func testEightKOutputIsAvailableForEveryStandardCanvasShape() {
+  func testEightKSelectionIsAvailableAndRendererAppliesMobileMemoryLimit() {
     var project = Project.new(collectionID: UUID())
     project.outputMaxDimension = 8192
 
     project.canvas = .square
     XCTAssertEqual(LayoutEngine.outputSize(for: project), CGSize(width: 8192, height: 8192))
-    XCTAssertGreaterThanOrEqual(CollageRenderer.maximumPixelCount, 8192 * 8192)
+    XCTAssertEqual(CollageRenderer.maximumPixelCount, 24_000_000)
+    let safeSquareSize = CollageRenderer.exportOutputSize(for: project)
+    XCTAssertLessThanOrEqual(
+      safeSquareSize.width * safeSquareSize.height,
+      CollageRenderer.maximumPixelCount
+    )
 
     project.canvas = .landscape
     XCTAssertEqual(LayoutEngine.outputSize(for: project), CGSize(width: 8192, height: 5461))
@@ -1255,7 +1444,7 @@ final class LayoutEngineTests: XCTestCase {
     }
 
     var offeredLayouts: [CollageLayoutTemplate] = []
-    for family in LayoutFamily.browserCases {
+    for family in LayoutFamily.browserCases where family != .custom {
       offeredLayouts += LayoutEngine.fittingLayoutSamples(
         family: family,
         project: project,
